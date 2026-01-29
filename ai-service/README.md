@@ -21,7 +21,7 @@ Note: First time running will download the Whisper model (~150MB for base model)
 python app.py
 ```
 
-Server will run on http://localhost:3000
+Server will run on http://localhost:5000
 
 ## API Endpoints
 
