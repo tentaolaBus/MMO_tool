@@ -48,23 +48,29 @@ export class VideoCutter {
         const clipFilename = `clip_${jobId}_${clipIndex}.mp4`;
         const clipPath = path.join(this.clipStorageDir, clipFilename);
 
+        // Calculate duration
+        const duration = endTime - startTime;
+
         // Format timestamps for FFmpeg (HH:MM:SS.MS)
         const startTimeStr = this.formatTimestamp(startTime);
-        const endTimeStr = this.formatTimestamp(endTime);
+        const durationStr = this.formatTimestamp(duration);
 
-        // FFmpeg command
-        // Using -c copy for speed (no re-encoding)
-        // If accuracy is needed, switch to -c:v libx264 -c:a aac
-        const ffmpegCmd = `ffmpeg -i "${videoPath}" ` +
-            `-ss ${startTimeStr} ` +
-            `-to ${endTimeStr} ` +
-            `-c:v copy ` +
-            `-c:a copy ` +
-            `-y ` + // Overwrite if exists
+        // FFmpeg command with accurate cutting
+        // Using -ss before -i for faster seeking, re-encode for accurate sync
+        const ffmpegCmd = `ffmpeg -ss ${startTimeStr} ` +
+            `-i "${videoPath}" ` +
+            `-t ${durationStr} ` +
+            `-c:v libx264 ` +
+            `-preset veryfast ` +  // Very fast encoding
+            `-crf 23 ` +
+            `-c:a aac ` +
+            `-b:a 128k ` +
+            `-avoid_negative_ts make_zero ` + // Fix timestamp issues
+            `-y ` +
             `"${clipPath}"`;
 
         try {
-            console.log(`Cutting clip ${clipIndex}: ${startTimeStr} to ${endTimeStr}`);
+            console.log(`Cutting clip ${clipIndex}: ${startTimeStr} duration ${durationStr}`);
             const { stdout, stderr } = await execAsync(ffmpegCmd);
 
             // FFmpeg writes progress to stderr, not an error

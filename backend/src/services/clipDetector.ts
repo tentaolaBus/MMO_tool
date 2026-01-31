@@ -1,5 +1,5 @@
 import { Transcript, TranscriptSegment } from '../models/job';
-import { ClipCandidate } from '../models/clip';
+import { ClipCandidate, ClipAnalysisResult } from '../models/clip';
 import { clipScorer } from './clipScorer';
 
 /**
@@ -20,11 +20,15 @@ export class ClipDetector {
     /**
      * Analyze transcript and generate clip candidates
      */
-    analyzeTranscript(transcript: Transcript, maxClips: number = CLIP_CONFIG.maxClips): ClipCandidate[] {
+    analyzeTranscript(transcript: Transcript, maxClips: number = CLIP_CONFIG.maxClips): ClipAnalysisResult {
         const { segments } = transcript;
 
         if (!segments || segments.length === 0) {
-            return [];
+            return {
+                jobId: transcript.jobId || '',
+                candidates: [],
+                selectedCount: 0
+            };
         }
 
         // Step 1: Detect pause breakpoints
@@ -52,7 +56,11 @@ export class ClipDetector {
         // Step 4: Select top clips (sorted by score, no overlaps)
         const selectedClips = this.selectTopClips(scoredCandidates, maxClips);
 
-        return selectedClips;
+        return {
+            jobId: transcript.jobId || '',
+            candidates: selectedClips,
+            selectedCount: selectedClips.length
+        };
     }
 
     /**

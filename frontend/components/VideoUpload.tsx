@@ -1,13 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { uploadVideo } from '@/lib/api';
+import { useRouter } from 'next/navigation';
+import { uploadVideo, pollJobStatus } from '@/lib/api';
 
-interface VideoUploadProps {
-    onUploadSuccess: (jobId: string) => void;
-}
-
-export default function VideoUpload({ onUploadSuccess }: VideoUploadProps) {
+export default function VideoUpload() {
+    const router = useRouter();
     const [file, setFile] = useState<File | null>(null);
     const [uploading, setUploading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -32,11 +30,15 @@ export default function VideoUpload({ onUploadSuccess }: VideoUploadProps) {
             const result = await uploadVideo(file);
 
             if (result.success && result.jobId) {
-                onUploadSuccess(result.jobId);
-                setFile(null);
-                // Reset file input
-                const fileInput = document.getElementById('video-input') as HTMLInputElement;
-                if (fileInput) fileInput.value = '';
+                const jobId = result.jobId;
+
+                // Poll for transcription completion
+                await pollJobStatus(jobId, (job) => {
+                    // Update progress if needed
+                });
+
+                // Redirect to clips page
+                router.push(`/job/${jobId}/clips`);
             } else {
                 setError(result.message || 'Upload failed');
             }
