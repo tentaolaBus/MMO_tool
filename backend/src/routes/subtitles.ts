@@ -16,53 +16,83 @@ router.get('/:clipId/subtitles', async (req: Request, res: Response) => {
     const language = (req.query.lang as string) || 'en';
 
     try {
-        // Parse clipId to get jobId and clip metadata
-        // Expected format: clip_<jobId>_<index>.mp4 or <jobId>_<index>
-        const clipIdMatch = clipId.match(/^(?:clip_)?(.+?)_(\d+)(?:\.mp4)?$/);
+        // First try to get clip from database by UUID
+        const { queries } = require('../services/database');
+        const clip = queries.getClipById.get(clipId);
 
-        if (!clipIdMatch) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid clip ID format',
-            });
-        }
+        let jobId: string;
+        let clipIndex: number;
+        let clipStartTime: number;
+        let clipEndTime: number;
 
-        const [, jobId, clipIndexStr] = clipIdMatch;
-        const clipIndex = parseInt(clipIndexStr);
+        if (clip) {
+            // Clip found in database
+            jobId = clip.job_id;
+            clipIndex = clip.clip_index;
+            clipStartTime = clip.start_time;
+            clipEndTime = clip.end_time;
+            console.log(`📋 Subtitle request for clip ${clipId} (job: ${jobId}, index: ${clipIndex})`);
+        } else {
+            // Fallback: Parse clipId in old format (clip_<jobId>_<index>.mp4)
+            const clipIdMatch = clipId.match(/^(?:clip_)?(.+?)_(\d+)(?:\.mp4)?$/);
 
-        // Load clip metadata to get start/end times
-        const clipsMetadataPath = path.resolve('./storage/clips', `${jobId}_metadata.json`);
+            if (!clipIdMatch) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Clip not found in database and invalid clip ID format',
+                });
+            }
 
-        let clipStartTime = 0;
-        let clipEndTime = 0;
+            [, jobId,] = clipIdMatch;
+            clipIndex = parseInt(clipIdMatch[2]);
 
-        if (fs.existsSync(clipsMetadataPath)) {
-            const metadata = JSON.parse(fs.readFileSync(clipsMetadataPath, 'utf-8'));
-            const clipMeta = metadata.clips?.find((c: any) => c.clipIndex === clipIndex);
+            // Load clip metadata from file
+            const clipsMetadataPath = path.resolve('./storage/clips', `${jobId}_metadata.json`);
 
-            if (clipMeta) {
-                clipStartTime = clipMeta.startTime;
-                clipEndTime = clipMeta.endTime;
+            if (fs.existsSync(clipsMetadataPath)) {
+                const metadata = JSON.parse(fs.readFileSync(clipsMetadataPath, 'utf-8'));
+                const clipMeta = metadata.clips?.find((c: any) => c.clipIndex === clipIndex);
+
+                if (clipMeta) {
+                    clipStartTime = clipMeta.startTime;
+                    clipEndTime = clipMeta.endTime;
+                } else {
+                    return res.status(404).json({
+                        success: false,
+                        message: 'Clip metadata not found',
+                    });
+                }
+            } else {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Clip metadata file not found',
+                });
             }
         }
 
-        // If metadata not found, try to infer from existing clip data
-        if (clipStartTime === 0 && clipEndTime === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Clip metadata not found. Please regenerate clips.',
-            });
-        }
-
-        // Check cache
+        // Check cache - file format is {jobId}_{clipIndex}_{language}.json
         const cacheDir = path.resolve('./storage/subtitles');
         if (!fs.existsSync(cacheDir)) {
             fs.mkdirSync(cacheDir, { recursive: true });
         }
 
-        const cacheFile = path.join(cacheDir, `${clipId}_${language}.json`);
+        // Try edited version first, then original
+        const cacheFileBase = `${jobId}_${clipIndex}_${language}`;
+        const editedCacheFile = path.join(cacheDir, `${cacheFileBase}_edited.json`);
+        const cacheFile = path.join(cacheDir, `${cacheFileBase}.json`);
 
-        // Return cached subtitles if available
+        // Return edited cached subtitles if available
+        if (fs.existsSync(editedCacheFile)) {
+            const cached: ClipSubtitles = JSON.parse(fs.readFileSync(editedCacheFile, 'utf-8'));
+            return res.json({
+                success: true,
+                ...cached,
+                cached: true,
+                edited: true,
+            });
+        }
+
+        // Return original cached subtitles if available
         if (fs.existsSync(cacheFile)) {
             const cached: ClipSubtitles = JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
             return res.json({
@@ -73,9 +103,10 @@ router.get('/:clipId/subtitles', async (req: Request, res: Response) => {
         }
 
         // Generate subtitles from transcript
+        console.log(`🎬 Generating subtitles for clip ${clipId} (job: ${jobId}, index: ${clipIndex})`);
         const subtitles = await generateSubtitlesForClip(
             jobId,
-            clipId,
+            `${jobId}_${clipIndex}`,  // Use consistent clipId format for generator
             clipStartTime,
             clipEndTime,
             'en' // Always generate in English first

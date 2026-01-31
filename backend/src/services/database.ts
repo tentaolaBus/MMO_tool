@@ -19,57 +19,74 @@ db.pragma('foreign_keys = ON');
 
 /**
  * Initialize database schema
+ * MUST be called before any queries are executed
  */
 export function initDatabase() {
-    console.log('Initializing database...');
+    console.log('Initializing database schema...');
+    console.log('Database path:', dbPath);
 
-    db.exec(`
-        -- Jobs table
-        CREATE TABLE IF NOT EXISTS jobs (
-            id TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            progress INTEGER DEFAULT 0,
-            video_path TEXT NOT NULL,
-            audio_path TEXT,
-            transcript_path TEXT,
-            error TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        );
+    try {
+        db.exec(`
+            -- Jobs table
+            CREATE TABLE IF NOT EXISTS jobs (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                progress INTEGER DEFAULT 0,
+                video_path TEXT NOT NULL,
+                audio_path TEXT,
+                transcript_path TEXT,
+                error TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
 
-        -- Clips table
-        CREATE TABLE IF NOT EXISTS clips (
-            id TEXT PRIMARY KEY,
-            job_id TEXT NOT NULL,
-            clip_index INTEGER NOT NULL,
-            video_path TEXT NOT NULL,
-            start_time REAL NOT NULL,
-            end_time REAL NOT NULL,
-            duration REAL NOT NULL,
-            text TEXT NOT NULL,
-            score_total REAL,
-            score_duration REAL,
-            score_keyword REAL,
-            score_completeness REAL,
-            keywords TEXT,
-            selected INTEGER DEFAULT 0,
-            rendered INTEGER DEFAULT 1,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
-            UNIQUE(job_id, clip_index)
-        );
+            -- Clips table
+            CREATE TABLE IF NOT EXISTS clips (
+                id TEXT PRIMARY KEY,
+                job_id TEXT NOT NULL,
+                clip_index INTEGER NOT NULL,
+                video_path TEXT NOT NULL,
+                start_time REAL NOT NULL,
+                end_time REAL NOT NULL,
+                duration REAL NOT NULL,
+                text TEXT NOT NULL,
+                score_total REAL,
+                score_duration REAL,
+                score_keyword REAL,
+                score_completeness REAL,
+                keywords TEXT,
+                selected INTEGER DEFAULT 0,
+                rendered INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
+                UNIQUE(job_id, clip_index)
+            );
 
-        -- Indexes
-        CREATE INDEX IF NOT EXISTS idx_clips_job_id ON clips(job_id);
-        CREATE INDEX IF NOT EXISTS idx_clips_selected ON clips(job_id, selected);
-    `);
+            -- Indexes
+            CREATE INDEX IF NOT EXISTS idx_clips_job_id ON clips(job_id);
+            CREATE INDEX IF NOT EXISTS idx_clips_selected ON clips(job_id, selected);
+        `);
 
-    console.log('Database initialized successfully');
+        console.log('✅ Database schema initialized successfully');
+
+        // Verify tables were created
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+        console.log('📋 Tables:', tables.map((t: any) => t.name).join(', '));
+
+    } catch (error) {
+        console.error('❌ Database initialization failed:', error);
+        throw error;
+    }
 }
+
+// Initialize database IMMEDIATELY on module load
+// This ensures tables exist before prepared statements are created
+initDatabase();
 
 /**
  * Prepared statements for common queries
+ * These are created AFTER tables are initialized
  */
 export const queries = {
     // Jobs
@@ -96,7 +113,7 @@ export const queries = {
 
     // Clips
     insertClip: db.prepare(`
-        INSERT INTO clips (
+        INSERT OR REPLACE INTO clips (
             id, job_id, clip_index, video_path,
             start_time, end_time, duration, text,
             score_total, score_duration, score_keyword, score_completeness,

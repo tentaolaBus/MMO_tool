@@ -72,18 +72,14 @@ export default function ClipsPage() {
 
             if (renderResult.success && renderResult.clips) {
                 setClips(renderResult.clips);
-                // Select all newly rendered clips
-                const allIds = new Set(renderResult.clips.map((c: any) => c.id));
-                setSelectedClips(allIds);
-
-                // Update selection in database
-                for (const clip of renderResult.clips) {
-                    try {
-                        await updateClipSelection(clip.id, true);
-                    } catch (err) {
-                        console.error('Failed to update clip selection:', err);
-                    }
-                }
+                // Clips are already saved to database during render
+                // Initialize UI selection state from the returned clips
+                const selectedIds = new Set(
+                    renderResult.clips
+                        .filter((c: any) => c.selected)
+                        .map((c: any) => c.id)
+                );
+                setSelectedClips(selectedIds);
 
                 setLoading(false);
                 setRendering(false);
@@ -203,9 +199,10 @@ export default function ClipsPage() {
             <ClipList
                 clips={clips}
                 selectedClips={selectedClips}
-                onToggle={toggleClip}
+                onToggleClip={toggleClip}
                 onToggleAll={toggleAll}
-                onPreview={handlePreview}
+                onPreviewClip={handlePreview}
+                backendUrl={process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3001'}
             />
 
             {/* Action Buttons */}
@@ -235,8 +232,9 @@ export default function ClipsPage() {
             {previewClip && (
                 <ClipPreviewModal
                     clip={previewClip}
-                    jobId={jobId}
+                    isOpen={!!previewClip}
                     onClose={() => setPreviewClip(null)}
+                    backendUrl={process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3001'}
                 />
             )}
         </div>

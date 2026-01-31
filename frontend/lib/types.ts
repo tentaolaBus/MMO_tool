@@ -17,7 +17,8 @@ export interface Clip {
     duration?: number;
     text?: string;
     score?: ClipScore;
-    size: number;
+    size?: number;
+    selected?: boolean;
     createdAt: string;
 }
 

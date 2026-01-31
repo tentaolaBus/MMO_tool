@@ -75,19 +75,6 @@ export async function pollJobStatus(
 }
 
 /**
- * Get clips for a job
- */
-export async function getClips(jobId: string): Promise<{
-    success: boolean;
-    jobId: string;
-    clips: any[];
-    count: number;
-}> {
-    const response = await axios.get(`${API_BASE_URL}/jobs/${jobId}/clips`);
-    return response.data;
-}
-
-/**
  * Render clips for a job
  */
 export async function renderClips(jobId: string, maxClips: number = 10): Promise<{
