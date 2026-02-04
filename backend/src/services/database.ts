@@ -11,8 +11,8 @@ if (!fs.existsSync(storageDir)) {
     fs.mkdirSync(storageDir, { recursive: true });
 }
 
-// Create database connection
-const db = new Database(dbPath);
+// Create database connection (exported for use in other services)
+export const db = new Database(dbPath);
 
 // Enable foreign keys
 db.pragma('foreign_keys = ON');

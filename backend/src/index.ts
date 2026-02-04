@@ -6,11 +6,15 @@ import uploadRoutes from './routes/upload';
 import jobsRoutes from './routes/jobs';
 import clipsRoutes from './routes/clips';
 import subtitlesRoutes from './routes/subtitles';
+import authRoutes from './routes/auth';
 import { jobProcessor } from './services/processor';
 import { closeDatabase } from './services/database';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 // Import database service - initialization happens automatically on import
 import './services/database';
+// Initialize SQL Server database and users table
+import { initSqlServerDatabase } from './config/sqlServer';
+initSqlServerDatabase().catch(err => console.error('SQL Server init failed:', err));
 
 const app = express();
 
@@ -23,6 +27,7 @@ app.use('/storage', express.static(path.join(__dirname, '../storage')));
 app.use('/storage/final', express.static(path.join(__dirname, '../storage/final')));
 
 // API routes
+app.use('/api/auth', authRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/jobs', jobsRoutes);
 app.use('/api/clips', clipsRoutes);
