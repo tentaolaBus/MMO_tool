@@ -46,6 +46,8 @@ export function initDatabase() {
                 job_id TEXT NOT NULL,
                 clip_index INTEGER NOT NULL,
                 video_path TEXT NOT NULL,
+                cloudinary_public_id TEXT,
+                cloudinary_url TEXT,
                 start_time REAL NOT NULL,
                 end_time REAL NOT NULL,
                 duration REAL NOT NULL,
@@ -115,10 +117,17 @@ export const queries = {
     insertClip: db.prepare(`
         INSERT OR REPLACE INTO clips (
             id, job_id, clip_index, video_path,
+            cloudinary_public_id, cloudinary_url,
             start_time, end_time, duration, text,
             score_total, score_duration, score_keyword, score_completeness,
             keywords, selected, rendered
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `),
+
+    updateClipCloudinary: db.prepare(`
+        UPDATE clips 
+        SET cloudinary_public_id = ?, cloudinary_url = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
     `),
 
     getClipsByJob: db.prepare(`

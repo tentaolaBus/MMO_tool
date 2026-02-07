@@ -31,9 +31,12 @@ export default function EditSubtitlesPage() {
         const loadData = async () => {
             try {
                 setLoading(true);
+                setError(null);
+
+                console.log('📋 EditSubtitlesPage - clipId:', clipId, 'jobId:', jobId);
 
                 // Construct clip info from ID
-                const clipIndexMatch = clipId.match(/_(\d+)$/);
+                const clipIndexMatch = clipId.match(/_(\\d+)$/);
                 const clipIndex = clipIndexMatch ? parseInt(clipIndexMatch[1]) : 0;
 
                 const mockClip: Clip = {
@@ -48,16 +51,33 @@ export default function EditSubtitlesPage() {
 
                 setClip(mockClip);
 
-                // Load subtitles
-                const subtitlesData = await getSubtitles(clipId, language);
-                if (subtitlesData.success && subtitlesData.segments) {
-                    setSubtitles(subtitlesData.segments);
+                // Load subtitles - use clipId (which should be the UUID from URL)
+                try {
+                    console.log('📋 Loading subtitles for clipId:', clipId, 'language:', language);
+                    const subtitlesData = await getSubtitles(clipId, language);
+                    if (subtitlesData.success && subtitlesData.segments) {
+                        setSubtitles(subtitlesData.segments);
+                        console.log('✅ Loaded', subtitlesData.segments.length, 'subtitle segments');
+                    } else {
+                        setSubtitles([]);
+                    }
+                } catch (subtitleErr: any) {
+                    console.error('Error loading subtitles:', subtitleErr);
+                    // Handle 404 gracefully - just means no subtitles yet
+                    if (subtitleErr.response?.status === 404) {
+                        setSubtitles([]);
+                        console.log('ℹ️ No subtitles available for this clip yet');
+                        // Don't show error for 404 - subtitle might not exist yet
+                    } else {
+                        // Show error for other failures
+                        setError(`Subtitle loading failed: ${subtitleErr.message}`);
+                    }
                 }
 
                 setLoading(false);
             } catch (err: any) {
                 console.error('Error loading data:', err);
-                setError(err.message || 'Failed to load subtitle data');
+                setError(err.message || 'Failed to load data');
                 setLoading(false);
             }
         };

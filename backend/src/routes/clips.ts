@@ -8,8 +8,32 @@ import { queries } from '../services/database';
 import { Transcript } from '../models/job';
 import { ClipCandidate, ClipAnalysisResult } from '../models/clip';
 import { v4 as uuidv4 } from 'uuid';
+import { cloudinaryService } from '../services/cloudinaryService';
 
 const router = Router();
+
+// Type for clip database row
+interface ClipRow {
+    id: string;
+    job_id: string;
+    clip_index: number;
+    video_path: string;
+    cloudinary_public_id: string | null;
+    cloudinary_url: string | null;
+    start_time: number;
+    end_time: number;
+    duration: number;
+    text: string;
+    score_total: number;
+    score_duration: number;
+    score_keyword: number;
+    score_completeness: number;
+    keywords: string;
+    selected: number;
+    rendered: number;
+    created_at: string;
+    updated_at: string;
+}
 
 /**
  * POST /api/clips/analyze
@@ -256,13 +280,14 @@ router.post('/render', async (req: Request, res: Response) => {
         // ===== RENDER CLIPS =====
         console.log('🎬 Starting clip rendering...');
         const generatedClips: any[] = [];
+        const isCloudinaryConfigured = cloudinaryService.isConfigured();
 
         for (let i = 0; i < clipsToRender.length; i++) {
             const candidate = clipsToRender[i];
             console.log(`  ⏳ Rendering clip ${i + 1}/${clipsToRender.length} (${candidate.startTime.toFixed(1)}s - ${candidate.endTime.toFixed(1)}s)...`);
 
             try {
-                // Cut clip using FFmpeg
+                // Cut clip using FFmpeg (now outputs 9:16 vertical format)
                 const clipPath = await videoCutter.cutClip(
                     job.videoPath,
                     candidate.startTime,
@@ -274,6 +299,25 @@ router.post('/render', async (req: Request, res: Response) => {
                 console.log(`    ✅ Clip rendered: ${path.basename(clipPath)}`);
 
                 const clipId = uuidv4();
+                let cloudinaryPublicId: string | null = null;
+                let cloudinaryUrl: string | null = null;
+
+                // Upload to Cloudinary if configured
+                if (isCloudinaryConfigured) {
+                    try {
+                        console.log(`    ☁️ Uploading to Cloudinary...`);
+                        const uploadResult = await cloudinaryService.uploadClip(clipPath, `${jobId}_${i}`);
+                        cloudinaryPublicId = uploadResult.publicId;
+                        cloudinaryUrl = uploadResult.secureUrl;
+                        console.log(`    ✅ Cloudinary upload success: ${cloudinaryUrl}`);
+
+                        // Delete local file after successful upload
+                        cloudinaryService.deleteLocalFile(clipPath);
+                    } catch (cloudinaryError: any) {
+                        console.error(`    ⚠️ Cloudinary upload failed, keeping local file:`, cloudinaryError.message);
+                        // Continue with local storage as fallback
+                    }
+                }
 
                 // Save to database
                 try {
@@ -282,6 +326,8 @@ router.post('/render', async (req: Request, res: Response) => {
                         jobId,
                         i,                                          // clip_index
                         clipPath,                                   // video_path
+                        cloudinaryPublicId,                         // cloudinary_public_id
+                        cloudinaryUrl,                              // cloudinary_url
                         candidate.startTime,                        // start_time
                         candidate.endTime,                          // end_time
                         candidate.duration,                         // duration
@@ -300,12 +346,16 @@ router.post('/render', async (req: Request, res: Response) => {
                     throw new Error(`Failed to save clip ${i} to database: ${dbInsertError.message}`);
                 }
 
+                // Determine video URL (prefer Cloudinary URL if available)
+                const videoUrl = cloudinaryUrl || `/storage/clips/${path.basename(clipPath)}`;
+
                 generatedClips.push({
                     id: clipId,
                     jobId,
                     clipIndex: i,
                     videoPath: clipPath,
-                    videoUrl: `/storage/clips/${path.basename(clipPath)}`,
+                    videoUrl: videoUrl,
+                    cloudinaryUrl: cloudinaryUrl,
                     filename: path.basename(clipPath),
                     startTime: candidate.startTime,
                     endTime: candidate.endTime,
@@ -565,4 +615,147 @@ router.post('/:clipId/render-final', async (req: Request, res: Response) => {
     }
 });
 
+/**
+ * GET /api/clips/:clipId/download
+ * Download a single clip as MP4
+ */
+router.get('/:clipId/download', async (req: Request, res: Response) => {
+    const { clipId } = req.params;
+
+    try {
+        const clip = queries.getClipById.get(clipId) as ClipRow | undefined;
+
+        if (!clip) {
+            return res.status(404).json({
+                success: false,
+                message: 'Clip not found',
+            });
+        }
+
+        // Prefer Cloudinary URL if available
+        if (clip.cloudinary_url) {
+            return res.redirect(clip.cloudinary_url);
+        }
+
+        // Fall back to local file
+        const clipPath = clip.video_path;
+        if (!fs.existsSync(clipPath)) {
+            return res.status(404).json({
+                success: false,
+                message: 'Clip file not found',
+            });
+        }
+
+        const filename = path.basename(clipPath);
+        res.setHeader('Content-Type', 'video/mp4');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+        const fileStream = fs.createReadStream(clipPath);
+        fileStream.pipe(res);
+
+    } catch (error: any) {
+        console.error('Download error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Download failed',
+        });
+    }
+});
+
+/**
+ * POST /api/clips/download-zip
+ * Download multiple clips as a ZIP archive
+ * Requires JWT authentication for 2+ clips
+ */
+router.post('/download-zip', async (req: Request, res: Response) => {
+    const { clipIds } = req.body;
+
+    try {
+        // Validate input
+        if (!clipIds || !Array.isArray(clipIds) || clipIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'clipIds array is required',
+            });
+        }
+
+        // If only 1 clip, redirect to single download
+        if (clipIds.length === 1) {
+            return res.redirect(307, `/api/clips/${clipIds[0]}/download`);
+        }
+
+        // Require authentication for 2+ clips
+        const authHeader = req.headers.authorization;
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return res.status(401).json({
+                success: false,
+                message: 'Authentication required for multi-clip download. Please log in.',
+            });
+        }
+
+        // Verify JWT token
+        const { authService } = require('../services/auth/authService');
+        const token = authHeader.substring(7);
+        const decoded = authService.verifyToken(token);
+
+        if (!decoded) {
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid or expired token. Please log in again.',
+            });
+        }
+
+        console.log(`📦 ZIP download requested by user ${decoded.userId} for ${clipIds.length} clips`);
+
+        // Fetch clip paths
+        const clipPaths: string[] = [];
+        let jobId = '';
+
+        for (const clipId of clipIds) {
+            const clip = queries.getClipById.get(clipId) as ClipRow | undefined;
+            if (clip && fs.existsSync(clip.video_path)) {
+                clipPaths.push(clip.video_path);
+                if (!jobId) jobId = clip.job_id;
+            }
+        }
+
+        if (clipPaths.length === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'No valid clips found',
+            });
+        }
+
+        // Import and use zipExporter
+        const { zipExporter } = require('../services/zipExporter');
+        const zipFilename = zipExporter.generateZipFilename(jobId, clipPaths.length);
+
+        // Set response headers for ZIP download
+        res.setHeader('Content-Type', 'application/zip');
+        res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
+
+        // Create and stream ZIP
+        const zipStream = zipExporter.createZipStream(clipPaths);
+        zipStream.pipe(res);
+
+        zipStream.on('error', (err: Error) => {
+            console.error('ZIP stream error:', err);
+            if (!res.headersSent) {
+                res.status(500).json({
+                    success: false,
+                    message: 'Failed to create ZIP archive',
+                });
+            }
+        });
+
+    } catch (error: any) {
+        console.error('ZIP download error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'ZIP download failed',
+        });
+    }
+});
+
 export default router;
+

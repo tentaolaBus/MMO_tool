@@ -40,13 +40,75 @@ export async function uploadVideo(file: File): Promise<{ success: boolean; jobId
     const formData = new FormData();
     formData.append('video', file);
 
-    const response = await axios.post(`${API_BASE_URL}/upload`, formData, {
-        headers: {
-            'Content-Type': 'multipart/form-data',
-        },
-    });
+    const endpoint = `${API_BASE_URL}/upload`;
+    console.log('📤 Uploading file to:', endpoint);
+    console.log('   File:', file.name, `(${(file.size / 1024 / 1024).toFixed(2)} MB)`);
 
-    return response.data;
+    try {
+        const response = await axios.post(endpoint, formData, {
+            headers: {
+                'Content-Type': 'multipart/form-data',
+            },
+        });
+
+        console.log('✅ Upload response:', response.data);
+        return response.data;
+    } catch (error: any) {
+        console.error('❌ Upload error:', error);
+
+        // Handle network errors (server not running, etc.)
+        if (error.code === 'ERR_NETWORK') {
+            throw new Error('Cannot connect to server. Please check if the backend is running on port 3001.');
+        }
+
+        // Handle timeout errors
+        if (error.code === 'ECONNABORTED') {
+            throw new Error('Upload timed out. Please try again with a smaller file.');
+        }
+
+        // Handle server errors with response
+        if (error.response?.data?.message) {
+            throw new Error(error.response.data.message);
+        }
+
+        // Generic fallback
+        throw new Error(error.message || 'Failed to upload video');
+    }
+}
+
+/**
+ * Upload a video from YouTube URL
+ */
+export async function uploadYoutubeVideo(url: string): Promise<{ success: boolean; jobId?: string; message?: string }> {
+    const endpoint = `${API_BASE_URL}/upload/youtube`;
+    console.log('📺 Downloading YouTube video:', url);
+    console.log('   Endpoint:', endpoint);
+
+    try {
+        const response = await axios.post(endpoint, { url });
+        console.log('✅ YouTube response:', response.data);
+        return response.data;
+    } catch (error: any) {
+        console.error('❌ YouTube upload error:', error);
+
+        // Handle network errors (server not running, etc.)
+        if (error.code === 'ERR_NETWORK') {
+            throw new Error('Cannot connect to server. Please check if the backend is running on port 3001.');
+        }
+
+        // Handle timeout errors (YouTube downloads can be slow)
+        if (error.code === 'ECONNABORTED') {
+            throw new Error('Download timed out. The YouTube video may be too long.');
+        }
+
+        // Handle server errors with response
+        if (error.response?.data?.message) {
+            throw new Error(error.response.data.message);
+        }
+
+        // Generic fallback
+        throw new Error(error.message || 'Failed to download YouTube video');
+    }
 }
 
 /**
@@ -176,3 +238,28 @@ export async function getTranscript(transcriptPath: string): Promise<Transcript>
     const response = await axios.get(transcriptPath);
     return response.data;
 }
+
+/**
+ * Download a single clip
+ */
+export function downloadClip(clipId: string): void {
+    window.open(`${API_BASE_URL}/clips/${clipId}/download`, '_blank');
+}
+
+/**
+ * Download multiple clips as ZIP (requires auth token)
+ */
+export async function downloadClipsZip(clipIds: string[], token: string): Promise<Blob> {
+    const response = await axios.post(
+        `${API_BASE_URL}/clips/download-zip`,
+        { clipIds },
+        {
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+            responseType: 'blob',
+        }
+    );
+    return response.data;
+}
+

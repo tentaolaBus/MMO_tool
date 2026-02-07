@@ -44,42 +44,6 @@ export default function Home() {
             </div>
           </div>
         )}
-
-        <div className="mt-12 max-w-2xl mx-auto">
-          <div className="bg-white rounded-lg shadow-lg p-6">
-            <h3 className="text-lg font-semibold text-gray-800 mb-3">Phase 1 & 2 - MVP Features</h3>
-            <ul className="space-y-2 text-sm text-gray-600">
-              <li className="flex items-start">
-                <span className="text-green-500 mr-2">✓</span>
-                <span>Video upload and storage</span>
-              </li>
-              <li className="flex items-start">
-                <span className="text-green-500 mr-2">✓</span>
-                <span>Audio extraction from video</span>
-              </li>
-              <li className="flex items-start">
-                <span className="text-green-500 mr-2">✓</span>
-                <span>AI-powered transcription with Whisper</span>
-              </li>
-              <li className="flex items-start">
-                <span className="text-green-500 mr-2">✓</span>
-                <span>Smart clip detection with scoring</span>
-              </li>
-              <li className="flex items-start">
-                <span className="text-green-500 mr-2">✓</span>
-                <span>Clip preview and selection UI</span>
-              </li>
-              <li className="flex items-start">
-                <span className="text-gray-400 mr-2">○</span>
-                <span className="text-gray-400">Subtitle generation (Phase 3)</span>
-              </li>
-              <li className="flex items-start">
-                <span className="text-gray-400 mr-2">○</span>
-                <span className="text-gray-400">Subtitle editor (Phase 4)</span>
-              </li>
-            </ul>
-          </div>
-        </div>
       </div>
     </main>
   );

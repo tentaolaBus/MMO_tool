@@ -14,15 +14,12 @@ export default function SubtitleOverlay({ segments, currentTime, enabled }: Subt
         return null;
     }
 
-    // Find the current subtitle segment
+    // Find the current subtitle segment with small epsilon for float comparison
+    // This ensures smooth transitions between segments
+    const epsilon = 0.05; // 50ms tolerance for timing
     const currentSegment = segments.find(
-        (seg) => currentTime >= seg.start && currentTime < seg.end
+        (seg) => currentTime >= (seg.start - epsilon) && currentTime < (seg.end + epsilon)
     );
-
-    // Debug: Log current time and found segment
-    if (currentTime > 0 && currentTime < 1) {
-        console.log('Subtitle overlay - segments:', segments.length, 'current time:', currentTime.toFixed(2));
-    }
 
     if (!currentSegment) {
         return null;
@@ -46,3 +43,4 @@ export default function SubtitleOverlay({ segments, currentTime, enabled }: Subt
         </div>
     );
 }
+

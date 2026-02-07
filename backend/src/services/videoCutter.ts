@@ -55,11 +55,15 @@ export class VideoCutter {
         const startTimeStr = this.formatTimestamp(startTime);
         const durationStr = this.formatTimestamp(duration);
 
-        // FFmpeg command with accurate cutting
-        // Using -ss before -i for faster seeking, re-encode for accurate sync
+        // FFmpeg command with accurate cutting and 9:16 vertical output
+        // Center-crop to 9:16 aspect ratio, then scale to 720x1280
+        // Filter explanation:
+        // - crop='ih*9/16:ih:(iw-ih*9/16)/2:0' = crop width to 9:16 ratio, centered horizontally
+        // - scale=720:1280 = scale to final 720x1280 resolution
         const ffmpegCmd = `ffmpeg -ss ${startTimeStr} ` +
             `-i "${videoPath}" ` +
             `-t ${durationStr} ` +
+            `-vf "crop='min(iw,ih*9/16):min(ih,iw*16/9):(iw-min(iw,ih*9/16))/2:(ih-min(ih,iw*16/9))/2',scale=720:1280" ` +
             `-c:v libx264 ` +
             `-preset veryfast ` +  // Very fast encoding
             `-crf 23 ` +

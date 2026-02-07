@@ -32,22 +32,32 @@ export default function ClipPreviewModal({ clip, isOpen, onClose, backendUrl }: 
             setError(null);
 
             try {
-                // Construct clipId from jobId and clipIndex
-                // Format: jobId_clipIndex (e.g., "abc-123_0")
-                const clipId = `${clip.jobId}_${clip.clipIndex}`;
+                // Use the clip's database ID (UUID)
+                // Fallback to jobId_clipIndex format if id is not available
+                const clipId = clip.id || `${clip.jobId}_${clip.clipIndex}`;
 
-                console.log('Loading subtitles for clipId:', clipId, 'language:', currentLanguage);
+                console.log('📋 Loading subtitles for clipId:', clipId, 'language:', currentLanguage);
 
                 const response = await getSubtitles(clipId, currentLanguage);
 
                 if (response.success && response.segments) {
                     setSubtitles(response.segments);
+                    console.log('✅ Loaded', response.segments.length, 'subtitle segments');
                 } else {
-                    setError('Failed to load subtitles');
+                    // No subtitles available but not an error
+                    setSubtitles([]);
                 }
             } catch (err: any) {
                 console.error('Error loading subtitles:', err);
-                setError(err.message || 'Failed to load subtitles');
+
+                // Handle 404 gracefully - just means no subtitles yet
+                if (err.response?.status === 404) {
+                    setSubtitles([]);
+                    // Don't show error for 404 - subtitle might not exist yet
+                    console.log('ℹ️ No subtitles available for this clip');
+                } else {
+                    setError(err.message || 'Failed to load subtitles');
+                }
             } finally {
                 setLoading(false);
             }
@@ -55,6 +65,7 @@ export default function ClipPreviewModal({ clip, isOpen, onClose, backendUrl }: 
 
         loadSubtitles();
     }, [clip, currentLanguage]);
+
 
     // Update current time on video progress
     useEffect(() => {
@@ -89,21 +100,32 @@ export default function ClipPreviewModal({ clip, isOpen, onClose, backendUrl }: 
     const videoSrc = `${backendUrl}${clip.videoUrl}`;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-75 p-4">
-            <div className="bg-white rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-90 p-4"
+            onClick={onClose}
+        >
+            <div
+                className="bg-gray-900 rounded-lg shadow-2xl overflow-hidden flex flex-col"
+                style={{
+                    height: '90vh',
+                    maxHeight: '90vh',
+                    width: 'auto',
+                }}
+                onClick={(e) => e.stopPropagation()}
+            >
                 {/* Header */}
-                <div className="flex items-center justify-between p-4 border-b">
+                <div className="flex items-center justify-between px-4 py-3 bg-gray-800 border-b border-gray-700">
                     <div>
-                        <h2 className="text-xl font-bold text-gray-900">
+                        <h2 className="text-lg font-bold text-white">
                             Clip Preview #{clip.clipIndex !== undefined ? clip.clipIndex + 1 : '?'}
                         </h2>
                         {clip.duration && (
-                            <p className="text-sm text-gray-600">Duration: {Math.round(clip.duration)}s</p>
+                            <p className="text-xs text-gray-400">Duration: {Math.round(clip.duration)}s</p>
                         )}
                     </div>
                     <button
                         onClick={onClose}
-                        className="text-gray-400 hover:text-gray-600 transition"
+                        className="text-gray-400 hover:text-white transition p-1"
                     >
                         <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -112,7 +134,7 @@ export default function ClipPreviewModal({ clip, isOpen, onClose, backendUrl }: 
                 </div>
 
                 {/* Subtitle Controls */}
-                <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-gray-50 border-b">
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700">
                     <SubtitleToggle
                         enabled={subtitlesEnabled}
                         onToggle={() => setSubtitlesEnabled(!subtitlesEnabled)}
@@ -125,43 +147,56 @@ export default function ClipPreviewModal({ clip, isOpen, onClose, backendUrl }: 
                     />
 
                     {loading && (
-                        <span className="text-sm text-gray-600">Loading subtitles...</span>
+                        <span className="text-xs text-gray-400">Loading subtitles...</span>
                     )}
                 </div>
 
-                {/* Video Player */}
-                <div className="relative bg-black flex-1 flex items-center justify-center">
-                    <video
-                        ref={videoRef}
-                        src={videoSrc}
-                        controls
-                        className="max-w-full max-h-full"
-                        autoPlay
-                    />
+                {/* Video Player Container - 9:16 aspect ratio */}
+                <div
+                    className="relative flex-1 bg-black flex items-center justify-center overflow-hidden"
+                >
+                    <div
+                        className="relative h-full"
+                        style={{
+                            aspectRatio: '9 / 16',
+                            maxWidth: '100%',
+                        }}
+                    >
+                        <video
+                            ref={videoRef}
+                            src={videoSrc}
+                            controls
+                            autoPlay
+                            className="w-full h-full object-contain"
+                            style={{
+                                backgroundColor: 'black',
+                            }}
+                        />
 
-                    {/* Subtitle Overlay */}
-                    <SubtitleOverlay
-                        segments={subtitles}
-                        currentTime={currentTime}
-                        enabled={subtitlesEnabled}
-                    />
+                        {/* Subtitle Overlay - positioned inside video container */}
+                        <SubtitleOverlay
+                            segments={subtitles}
+                            currentTime={currentTime}
+                            enabled={subtitlesEnabled}
+                        />
+                    </div>
                 </div>
 
                 {/* Error Message */}
                 {error && (
-                    <div className="p-4 bg-red-50 border-t border-red-200">
-                        <p className="text-sm text-red-600">⚠ {error}</p>
+                    <div className="px-4 py-2 bg-red-900 border-t border-red-700">
+                        <p className="text-xs text-red-300">⚠ {error}</p>
                     </div>
                 )}
 
-                {/* Clip Info */}
+                {/* Clip Info - Compact */}
                 {clip.text && (
-                    <div className="p-4 border-t">
-                        <p className="text-sm text-gray-700">
-                            <strong>Content:</strong> {clip.text}
+                    <div className="px-4 py-2 bg-gray-800 border-t border-gray-700 max-h-20 overflow-y-auto">
+                        <p className="text-xs text-gray-300 line-clamp-2">
+                            <strong className="text-gray-200">Content:</strong> {clip.text}
                         </p>
                         {clip.score && (
-                            <p className="text-sm text-gray-600 mt-2">
+                            <p className="text-xs text-gray-400 mt-1">
                                 Score: {clip.score.total}/100
                             </p>
                         )}
