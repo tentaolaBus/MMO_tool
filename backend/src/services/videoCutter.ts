@@ -1,10 +1,35 @@
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
 
-const execAsync = promisify(exec);
+/**
+ * Run FFmpeg via spawn() and return a Promise.
+ * Using spawn avoids all shell-escaping issues with Windows paths.
+ */
+function runFFmpeg(args: string[]): Promise<{ stdout: string; stderr: string }> {
+    return new Promise((resolve, reject) => {
+        const proc = spawn('ffmpeg', args, { windowsHide: true });
+
+        let stdout = '';
+        let stderr = '';
+
+        proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+        proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+        proc.on('error', (err) => reject(err));
+
+        proc.on('close', (code) => {
+            if (code === 0) {
+                resolve({ stdout, stderr });
+            } else {
+                const error: any = new Error(`FFmpeg exited with code ${code}`);
+                error.stderr = stderr;
+                reject(error);
+            }
+        });
+    });
+}
 
 /**
  * VideoCutter - Cuts video clips using FFmpeg
@@ -43,8 +68,15 @@ export class VideoCutter {
         jobId: string,
         clipIndex: number
     ): Promise<string> {
+        // Validate input file exists
+        if (!fs.existsSync(videoPath)) {
+            throw new Error(`Input video file not found: ${videoPath}`);
+        }
+
+        // Ensure output directory exists
+        this.ensureClipDirectory();
+
         // Generate clip filename
-        const clipId = uuidv4();
         const clipFilename = `clip_${jobId}_${clipIndex}.mp4`;
         const clipPath = path.join(this.clipStorageDir, clipFilename);
 
@@ -55,31 +87,31 @@ export class VideoCutter {
         const startTimeStr = this.formatTimestamp(startTime);
         const durationStr = this.formatTimestamp(duration);
 
-        // FFmpeg command with accurate cutting and 9:16 vertical output
-        // Center-crop to 9:16 aspect ratio, then scale to 720x1280
-        // Filter explanation:
-        // - crop='ih*9/16:ih:(iw-ih*9/16)/2:0' = crop width to 9:16 ratio, centered horizontally
-        // - scale=720:1280 = scale to final 720x1280 resolution
-        const ffmpegCmd = `ffmpeg -ss ${startTimeStr} ` +
-            `-i "${videoPath}" ` +
-            `-t ${durationStr} ` +
-            `-vf "crop='min(iw,ih*9/16):min(ih,iw*16/9):(iw-min(iw,ih*9/16))/2:(ih-min(ih,iw*16/9))/2',scale=720:1280" ` +
-            `-c:v libx264 ` +
-            `-preset veryfast ` +  // Very fast encoding
-            `-crf 23 ` +
-            `-c:a aac ` +
-            `-b:a 128k ` +
-            `-avoid_negative_ts make_zero ` + // Fix timestamp issues
-            `-y ` +
-            `"${clipPath}"`;
+        // Build FFmpeg args as array (avoids all shell escaping issues)
+        const ffmpegArgs = [
+            '-ss', startTimeStr,
+            '-i', videoPath,
+            '-t', durationStr,
+            '-vf', "crop='min(iw,ih*9/16):min(ih,iw*16/9):(iw-min(iw,ih*9/16))/2:(ih-min(ih,iw*16/9))/2',scale=720:1280",
+            '-c:v', 'libx264',
+            '-preset', 'veryfast',
+            '-crf', '23',
+            '-c:a', 'aac',
+            '-b:a', '128k',
+            '-avoid_negative_ts', 'make_zero',
+            '-y',
+            clipPath
+        ];
 
         try {
-            console.log(`Cutting clip ${clipIndex}: ${startTimeStr} duration ${durationStr}`);
-            const { stdout, stderr } = await execAsync(ffmpegCmd);
+            console.log(`🎬 Cutting clip ${clipIndex}: ${startTimeStr} duration ${durationStr}`);
+            console.log(`📋 FFmpeg args:`, ffmpegArgs.join(' '));
+
+            const { stderr } = await runFFmpeg(ffmpegArgs);
 
             // FFmpeg writes progress to stderr, not an error
-            if (stderr && !stderr.includes('error')) {
-                console.log(`FFmpeg output: ${stderr.substring(0, 200)}...`);
+            if (stderr) {
+                console.log(`🔧 FFmpeg stderr (last 300 chars): ${stderr.slice(-300)}`);
             }
 
             // Verify file was created
@@ -87,12 +119,16 @@ export class VideoCutter {
                 throw new Error('Clip file was not created');
             }
 
-            console.log(`Clip ${clipIndex} created: ${clipPath}`);
+            const fileSizeKB = (fs.statSync(clipPath).size / 1024).toFixed(0);
+            console.log(`✅ Clip ${clipIndex} created: ${clipPath} (${fileSizeKB} KB)`);
             return clipPath;
 
         } catch (error: any) {
-            console.error(`Failed to cut clip ${clipIndex}:`, error.message);
-            throw new Error(`FFmpeg clip cutting failed: ${error.message}`);
+            console.error(`❌ Failed to cut clip ${clipIndex}:`, error.message);
+            if (error.stderr) {
+                console.error(`❌ FFmpeg stderr:`, error.stderr.slice(-500));
+            }
+            throw new Error(`FFmpeg clip cutting failed for clip ${clipIndex}: ${error.message}`);
         }
     }
 

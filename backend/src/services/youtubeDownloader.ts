@@ -85,48 +85,141 @@ class YouTubeDownloaderService {
 
         console.log(`📥 Downloading YouTube video to: ${outputPath}`);
 
-        try {
-            // yt-dlp command with optimal settings for processing
-            // -f best[ext=mp4] - prefer mp4 format
-            // --merge-output-format mp4 - ensure output is mp4
-            // -o output path
-            const cmd = `yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" ` +
-                `--merge-output-format mp4 ` +
-                `--no-playlist ` +
-                `--no-check-certificate ` +
-                `-o "${outputPath}" ` +
-                `"${youtubeUrl}"`;
+        // ── Format fallback chain ────────────────────────────────────────
+        // Strategy 1: Best mp4 video + m4a audio merged to mp4 (ideal)
+        // Strategy 2: Best quality, let yt-dlp pick format and re-encode to mp4
+        // Strategy 3: Absolute fallback — any available format, re-encoded
+        const formatStrategies = [
+            {
+                name: 'mp4+m4a merge',
+                format: 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio',
+            },
+            {
+                name: 'best quality + re-encode',
+                format: 'bestvideo+bestaudio/best',
+            },
+            {
+                name: 'any available format',
+                format: 'best',
+            },
+        ];
 
-            console.log(`Running: ${cmd}`);
+        let lastError: Error | null = null;
 
-            const { stdout, stderr } = await execAsync(cmd, {
-                timeout: 600000, // 10 minute timeout
-                maxBuffer: 10 * 1024 * 1024, // 10MB buffer
+        for (let attempt = 0; attempt < formatStrategies.length; attempt++) {
+            const strategy = formatStrategies[attempt];
+            console.log(`\n🔄 [yt-dlp] Attempt ${attempt + 1}/${formatStrategies.length}: ${strategy.name}`);
+
+            try {
+                await this.runYtDlp(youtubeUrl, outputPath, strategy.format);
+
+                // Verify file was created
+                if (!fs.existsSync(outputPath)) {
+                    throw new Error('Downloaded file not found after yt-dlp completed');
+                }
+
+                const stats = fs.statSync(outputPath);
+                if (stats.size === 0) {
+                    fs.unlinkSync(outputPath);
+                    throw new Error('Downloaded file is empty (0 bytes)');
+                }
+
+                console.log(`✅ Downloaded: ${path.basename(outputPath)} (${(stats.size / 1024 / 1024).toFixed(2)} MB) using strategy: ${strategy.name}`);
+                return outputPath;
+            } catch (err: any) {
+                lastError = err;
+                console.error(`❌ [yt-dlp] Strategy "${strategy.name}" failed: ${err.message}`);
+
+                // Clean up partial download before retry
+                if (fs.existsSync(outputPath)) {
+                    fs.unlinkSync(outputPath);
+                }
+
+                // Don't retry on non-format errors (e.g., video is private, network down)
+                const msg = err.message || '';
+                if (msg.includes('Private video') || msg.includes('Video unavailable') ||
+                    msg.includes('Sign in') || msg.includes('confirm your age')) {
+                    console.error('🚫 [yt-dlp] Video access error — not retrying');
+                    break;
+                }
+            }
+        }
+
+        // All strategies failed — throw structured error
+        const errMsg = lastError?.message || 'Unknown error';
+
+        // Detect specific error categories for better frontend messages
+        if (errMsg.includes('Sign in') || errMsg.includes('bot') || errMsg.includes('confirm')) {
+            console.error('🤖 YouTube bot detection triggered! Try:');
+            console.error('   1. Update yt-dlp: pip install -U yt-dlp');
+            console.error('   2. Use cookies: yt-dlp --cookies-from-browser chrome');
+            console.error('   3. Export cookies.txt from browser and use --cookies cookies.txt');
+        }
+
+        throw new Error(`YouTube download failed after ${formatStrategies.length} format strategies: ${errMsg}`);
+    }
+
+    /**
+     * Run yt-dlp with spawn for proper output capture
+     */
+    private runYtDlp(url: string, outputPath: string, format: string): Promise<void> {
+        return new Promise((resolve, reject) => {
+            const { spawn } = require('child_process');
+
+            const args = [
+                '-f', format,
+                '--merge-output-format', 'mp4',
+                '--no-playlist',
+                '--no-check-certificate',
+                '--extractor-args', 'youtube:player_client=web,default',
+                '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                '--no-warnings',
+                '--newline',
+                '-o', outputPath,
+                url,
+            ];
+
+            console.log(`[yt-dlp] spawn: yt-dlp ${args.join(' ')}`);
+
+            const proc = spawn('yt-dlp', args, {
+                windowsHide: true,
+                timeout: 600000, // 10 min
             });
 
-            if (stderr && !stderr.includes('WARNING')) {
-                console.log('yt-dlp output:', stderr);
-            }
+            let stdout = '';
+            let stderr = '';
 
-            // Verify file was created
-            if (!fs.existsSync(outputPath)) {
-                throw new Error('Downloaded file not found');
-            }
+            proc.stdout.on('data', (data: Buffer) => {
+                const line = data.toString();
+                stdout += line;
+                // Log download progress in real time
+                if (line.includes('[download]')) {
+                    process.stdout.write(`   ${line.trim()}\r`);
+                }
+            });
 
-            const stats = fs.statSync(outputPath);
-            console.log(`✅ Downloaded: ${path.basename(outputPath)} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+            proc.stderr.on('data', (data: Buffer) => {
+                stderr += data.toString();
+            });
 
-            return outputPath;
-        } catch (error: any) {
-            console.error('❌ YouTube download failed:', error.message);
+            proc.on('close', (code: number | null) => {
+                console.log(`\n[yt-dlp] Exit code: ${code}`);
+                if (stdout) console.log(`[yt-dlp] stdout (last 500): ${stdout.slice(-500)}`);
+                if (stderr) console.error(`[yt-dlp] stderr: ${stderr}`);
+                console.log(`[yt-dlp] Output file exists: ${fs.existsSync(outputPath)}`);
 
-            // Clean up partial download
-            if (fs.existsSync(outputPath)) {
-                fs.unlinkSync(outputPath);
-            }
+                if (code !== 0) {
+                    reject(new Error(stderr || `yt-dlp exited with code ${code}`));
+                } else {
+                    resolve();
+                }
+            });
 
-            throw new Error(`YouTube download failed: ${error.message}`);
-        }
+            proc.on('error', (err: Error) => {
+                console.error(`[yt-dlp] spawn error: ${err.message}`);
+                reject(new Error(`Failed to start yt-dlp: ${err.message}`));
+            });
+        });
     }
 
     /**

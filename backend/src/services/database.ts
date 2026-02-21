@@ -1,172 +1,180 @@
-import Database from 'better-sqlite3';
-import path from 'path';
-import fs from 'fs';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import dotenv from 'dotenv';
 
-// Database path
-const dbPath = path.resolve('./storage/app.db');
+// Load environment variables
+dotenv.config();
 
-// Ensure storage directory exists
-const storageDir = path.dirname(dbPath);
-if (!fs.existsSync(storageDir)) {
-    fs.mkdirSync(storageDir, { recursive: true });
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+    console.error('❌ SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in .env');
+    process.exit(1);
 }
 
-// Create database connection (exported for use in other services)
-export const db = new Database(dbPath);
+// Create Supabase client (service role — full access)
+export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseKey);
 
-// Enable foreign keys
-db.pragma('foreign_keys = ON');
-
-/**
- * Initialize database schema
- * MUST be called before any queries are executed
- */
-export function initDatabase() {
-    console.log('Initializing database schema...');
-    console.log('Database path:', dbPath);
-
-    try {
-        db.exec(`
-            -- Jobs table
-            CREATE TABLE IF NOT EXISTS jobs (
-                id TEXT PRIMARY KEY,
-                status TEXT NOT NULL,
-                progress INTEGER DEFAULT 0,
-                video_path TEXT NOT NULL,
-                audio_path TEXT,
-                transcript_path TEXT,
-                error TEXT,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-
-            -- Clips table
-            CREATE TABLE IF NOT EXISTS clips (
-                id TEXT PRIMARY KEY,
-                job_id TEXT NOT NULL,
-                clip_index INTEGER NOT NULL,
-                video_path TEXT NOT NULL,
-                cloudinary_public_id TEXT,
-                cloudinary_url TEXT,
-                start_time REAL NOT NULL,
-                end_time REAL NOT NULL,
-                duration REAL NOT NULL,
-                text TEXT NOT NULL,
-                score_total REAL,
-                score_duration REAL,
-                score_keyword REAL,
-                score_completeness REAL,
-                keywords TEXT,
-                selected INTEGER DEFAULT 0,
-                rendered INTEGER DEFAULT 1,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE,
-                UNIQUE(job_id, clip_index)
-            );
-
-            -- Indexes
-            CREATE INDEX IF NOT EXISTS idx_clips_job_id ON clips(job_id);
-            CREATE INDEX IF NOT EXISTS idx_clips_selected ON clips(job_id, selected);
-        `);
-
-        console.log('✅ Database schema initialized successfully');
-
-        // Verify tables were created
-        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
-        console.log('📋 Tables:', tables.map((t: any) => t.name).join(', '));
-
-    } catch (error) {
-        console.error('❌ Database initialization failed:', error);
-        throw error;
-    }
-}
-
-// Initialize database IMMEDIATELY on module load
-// This ensures tables exist before prepared statements are created
-initDatabase();
+console.log('✅ Supabase client initialized');
+console.log(`📡 URL: ${supabaseUrl}`);
 
 /**
- * Prepared statements for common queries
- * These are created AFTER tables are initialized
+ * Async query helpers that mirror the old synchronous `queries` API.
+ * Each method returns the data directly (throws on error).
  */
 export const queries = {
-    // Jobs
-    insertJob: db.prepare(`
-        INSERT INTO jobs (id, status, progress, video_path, audio_path, transcript_path)
-        VALUES (?, ?, ?, ?, ?, ?)
-    `),
+    // ── Jobs ─────────────────────────────────────────────────────────────
 
-    getJob: db.prepare(`
-        SELECT * FROM jobs WHERE id = ?
-    `),
+    async insertJob(id: string, status: string, progress: number, videoPath: string, audioPath: string | null, transcriptPath: string | null) {
+        const { error } = await supabase.from('jobs').upsert({
+            id, status, progress,
+            video_path: videoPath,
+            audio_path: audioPath,
+            transcript_path: transcriptPath,
+        }, { onConflict: 'id' });
+        if (error) throw new Error(`insertJob failed: ${error.message}`);
+    },
 
-    updateJobStatus: db.prepare(`
-        UPDATE jobs 
-        SET status = ?, progress = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    `),
+    async getJob(id: string) {
+        const { data, error } = await supabase
+            .from('jobs')
+            .select('*')
+            .eq('id', id)
+            .single();
+        if (error && error.code !== 'PGRST116') throw new Error(`getJob failed: ${error.message}`);
+        return data;
+    },
 
-    updateJobError: db.prepare(`
-        UPDATE jobs 
-        SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    `),
+    async updateJobStatus(status: string, progress: number, id: string) {
+        const { error } = await supabase
+            .from('jobs')
+            .update({ status, progress })
+            .eq('id', id);
+        if (error) throw new Error(`updateJobStatus failed: ${error.message}`);
+    },
 
-    // Clips
-    insertClip: db.prepare(`
-        INSERT OR REPLACE INTO clips (
-            id, job_id, clip_index, video_path,
-            cloudinary_public_id, cloudinary_url,
-            start_time, end_time, duration, text,
-            score_total, score_duration, score_keyword, score_completeness,
-            keywords, selected, rendered
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `),
+    async updateJobError(errorMsg: string, id: string) {
+        const { error } = await supabase
+            .from('jobs')
+            .update({ status: 'failed', error: errorMsg })
+            .eq('id', id);
+        if (error) throw new Error(`updateJobError failed: ${error.message}`);
+    },
 
-    updateClipCloudinary: db.prepare(`
-        UPDATE clips 
-        SET cloudinary_public_id = ?, cloudinary_url = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    `),
+    // ── Clips ────────────────────────────────────────────────────────────
 
-    getClipsByJob: db.prepare(`
-        SELECT * FROM clips 
-        WHERE job_id = ? 
-        ORDER BY clip_index ASC
-    `),
+    async insertClip(
+        id: string, jobId: string, clipIndex: number, videoPath: string,
+        cloudinaryPublicId: string | null, cloudinaryUrl: string | null,
+        startTime: number, endTime: number, duration: number, text: string,
+        scoreTotal: number | null, scoreDuration: number | null,
+        scoreKeyword: number | null, scoreCompleteness: number | null,
+        keywords: string | null, selected: number, rendered: number
+    ) {
+        const { error } = await supabase.from('clips').upsert({
+            id, job_id: jobId, clip_index: clipIndex, video_path: videoPath,
+            cloudinary_public_id: cloudinaryPublicId, cloudinary_url: cloudinaryUrl,
+            start_time: startTime, end_time: endTime, duration, text,
+            score_total: scoreTotal, score_duration: scoreDuration,
+            score_keyword: scoreKeyword, score_completeness: scoreCompleteness,
+            keywords, selected: selected === 1, rendered: rendered === 1,
+        }, { onConflict: 'job_id,clip_index' });
+        if (error) throw new Error(`insertClip failed: ${error.message}`);
+    },
 
-    getSelectedClips: db.prepare(`
-        SELECT * FROM clips 
-        WHERE job_id = ? AND selected = 1
-        ORDER BY clip_index ASC
-    `),
+    async updateClipCloudinary(publicId: string, url: string, id: string) {
+        const { error } = await supabase
+            .from('clips')
+            .update({ cloudinary_public_id: publicId, cloudinary_url: url })
+            .eq('id', id);
+        if (error) throw new Error(`updateClipCloudinary failed: ${error.message}`);
+    },
 
-    updateClipSelection: db.prepare(`
-        UPDATE clips 
-        SET selected = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    `),
+    async getClipsByJob(jobId: string) {
+        const { data, error } = await supabase
+            .from('clips')
+            .select('*')
+            .eq('job_id', jobId)
+            .order('clip_index', { ascending: true });
+        if (error) throw new Error(`getClipsByJob failed: ${error.message}`);
+        return data || [];
+    },
 
-    getClipById: db.prepare(`
-        SELECT * FROM clips WHERE id = ?
-    `),
+    async getSelectedClips(jobId: string) {
+        const { data, error } = await supabase
+            .from('clips')
+            .select('*')
+            .eq('job_id', jobId)
+            .eq('selected', true)
+            .order('clip_index', { ascending: true });
+        if (error) throw new Error(`getSelectedClips failed: ${error.message}`);
+        return data || [];
+    },
 
-    deleteClipsByJob: db.prepare(`
-        DELETE FROM clips WHERE job_id = ?
-    `),
+    async updateClipSelection(selected: number, id: string) {
+        const { error } = await supabase
+            .from('clips')
+            .update({ selected: selected === 1 })
+            .eq('id', id);
+        if (error) throw new Error(`updateClipSelection failed: ${error.message}`);
+    },
 
-    countClipsByJob: db.prepare(`
-        SELECT COUNT(*) as count FROM clips WHERE job_id = ?
-    `),
+    async getClipById(id: string) {
+        const { data, error } = await supabase
+            .from('clips')
+            .select('*')
+            .eq('id', id)
+            .single();
+        if (error && error.code !== 'PGRST116') throw new Error(`getClipById failed: ${error.message}`);
+        return data;
+    },
+
+    async deleteClipsByJob(jobId: string) {
+        const { error } = await supabase
+            .from('clips')
+            .delete()
+            .eq('job_id', jobId);
+        if (error) throw new Error(`deleteClipsByJob failed: ${error.message}`);
+    },
+
+    async countClipsByJob(jobId: string) {
+        const { count, error } = await supabase
+            .from('clips')
+            .select('*', { count: 'exact', head: true })
+            .eq('job_id', jobId);
+        if (error) throw new Error(`countClipsByJob failed: ${error.message}`);
+        return { count: count || 0 };
+    },
+
+    async deleteJob(jobId: string) {
+        const { error } = await supabase
+            .from('jobs')
+            .delete()
+            .eq('id', jobId);
+        if (error) throw new Error(`deleteJob failed: ${error.message}`);
+    },
+
+    async updateClipVideoPath(videoPath: string, id: string) {
+        // Clear Cloudinary fields — the fresh local render is now authoritative.
+        // buildVideoUrl() prefers cloudinary_url, so leaving it would serve the OLD video.
+        const { error } = await supabase
+            .from('clips')
+            .update({
+                video_path: videoPath,
+                cloudinary_url: null,
+                cloudinary_public_id: null,
+                updated_at: new Date().toISOString(),
+            })
+            .eq('id', id);
+        if (error) throw new Error(`updateClipVideoPath failed: ${error.message}`);
+    },
 };
 
 /**
- * Close database connection (for graceful shutdown)
+ * Close database connection (no-op for Supabase — HTTP based)
  */
 export function closeDatabase() {
-    db.close();
-    console.log('Database connection closed');
+    console.log('Supabase connection closed (HTTP — no persistent connection)');
 }
 
-export default db;
+export default supabase;

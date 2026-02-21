@@ -1,11 +1,11 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, usePathname } from 'next/navigation';
 import VideoPlayer from '../../../../components/VideoPlayer';
 import ClipList from '../../../../components/ClipList';
 import ClipPreviewModal from '../../../../components/ClipPreviewModal';
-import { getJobStatus, getClips, renderClips, updateClipSelection } from '../../../../lib/api';
+import { getJobStatus, getClips, renderClips, updateClipSelection, downloadSelectedClips, cleanupJob } from '../../../../lib/api';
 import { Clip } from '../../../../lib/types';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3001';
@@ -13,6 +13,7 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'htt
 export default function ClipsPage() {
     const params = useParams();
     const router = useRouter();
+    const pathname = usePathname();
     const jobId = params.id as string;
 
     const [job, setJob] = useState<any>(null);
@@ -22,6 +23,24 @@ export default function ClipsPage() {
     const [loading, setLoading] = useState(true);
     const [rendering, setRendering] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [downloading, setDownloading] = useState(false);
+    const [refreshKey, setRefreshKey] = useState(0);
+
+    // Refetch clips whenever this page becomes active via client-side navigation
+    // (e.g., returning from subtitle editor after Save Style)
+    useEffect(() => {
+        setRefreshKey(k => k + 1);
+    }, [pathname]);
+
+    // Re-fetch clips when the tab regains focus (e.g., returning from edit page)
+    useEffect(() => {
+        const handleFocus = () => {
+            console.log('🔄 Tab focused — refreshing clips');
+            setRefreshKey(k => k + 1);
+        };
+        window.addEventListener('focus', handleFocus);
+        return () => window.removeEventListener('focus', handleFocus);
+    }, []);
 
     // Load job details and clips from database
     useEffect(() => {
@@ -31,6 +50,9 @@ export default function ClipsPage() {
                 setJob(jobData);
 
                 if (jobData.status !== 'completed') {
+                    // #region agent log
+                    fetch('http://127.0.0.1:7740/ingest/d20e865f-85ea-4423-902d-fc4a5598c54d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0170bb'},body:JSON.stringify({sessionId:'0170bb',location:'clips/page.tsx:52',message:'Job not completed',data:{jobId:jobId,status:jobData.status,error:jobData.error},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+                    // #endregion
                     setError('Transcription not yet complete. Please wait.');
                     setLoading(false);
                     return;
@@ -41,6 +63,10 @@ export default function ClipsPage() {
 
                 if (clipsData.success && clipsData.clips && clipsData.clips.length > 0) {
                     console.log(`Loaded ${clipsData.clips.length} clips from database`);
+                    // DIAGNOSTIC: Log video URLs and timestamps to verify fresh data
+                    clipsData.clips.forEach((c: any) => {
+                        console.log(`  📋 Clip ${c.clipIndex}: videoUrl=${c.videoUrl} updatedAt=${c.updatedAt}`);
+                    });
                     setClips(clipsData.clips);
                     // Restore selection from database
                     const selected = new Set(
@@ -60,7 +86,7 @@ export default function ClipsPage() {
         };
 
         loadJobAndClips();
-    }, [jobId]);
+    }, [jobId, refreshKey]);
 
     // Render clips (only called if no clips in DB)
     const handleRenderClips = async () => {
@@ -143,10 +169,33 @@ export default function ClipsPage() {
         }
     };
 
-    // Handle continue
-    const handleContinue = () => {
-        // TODO: Move to next phase (subtitle generation)
-        alert(`Selected ${selectedClips.size} clips. Moving to Phase 3 (Subtitle Generation) coming soon!`);
+    // Handle download of selected clips, then cleanup all job files
+    const handleDownload = async () => {
+        const ids = Array.from(selectedClips);
+        if (ids.length === 0) return;
+
+        setDownloading(true);
+        setError(null);
+
+        try {
+            await downloadSelectedClips(ids);
+
+            // Cleanup all files on the server after successful download
+            try {
+                await cleanupJob(jobId);
+                console.log('Cleanup complete for job', jobId);
+            } catch (cleanupErr) {
+                console.warn('Cleanup failed (files may remain on server):', cleanupErr);
+            }
+
+            // Redirect to home after download + cleanup
+            router.push('/');
+        } catch (err: any) {
+            console.error('Download failed:', err);
+            setError(err.message || 'Failed to download clips');
+        } finally {
+            setDownloading(false);
+        }
     };
 
     // Handle preview
@@ -214,17 +263,32 @@ export default function ClipsPage() {
                     Cancel
                 </button>
                 <button
-                    onClick={handleContinue}
-                    disabled={selectedClips.size === 0}
+                    onClick={handleDownload}
+                    disabled={selectedClips.size === 0 || downloading}
                     className={`
-                        px-6 py-3 rounded-lg font-semibold transition
-                        ${selectedClips.size > 0
+                        px-6 py-3 rounded-lg font-semibold transition flex items-center gap-2
+                        ${selectedClips.size > 0 && !downloading
                             ? 'bg-blue-600 text-white hover:bg-blue-700'
                             : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                         }
                     `}
                 >
-                    Continue with {selectedClips.size} clip{selectedClips.size !== 1 ? 's' : ''}
+                    {downloading ? (
+                        <>
+                            <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                            {selectedClips.size > 1 ? 'Zipping & Downloading...' : 'Downloading...'}
+                        </>
+                    ) : (
+                        <>
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                            </svg>
+                            Download {selectedClips.size} clip{selectedClips.size !== 1 ? 's' : ''}{selectedClips.size > 1 ? ' (ZIP)' : ''}
+                        </>
+                    )}
                 </button>
             </div>
 

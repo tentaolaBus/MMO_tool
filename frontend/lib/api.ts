@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { SubtitleSegment, SubtitleResponse } from './types';
+import { SubtitleSegment, SubtitleResponse, SubtitleStyle } from './types';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
 
@@ -145,11 +145,26 @@ export async function renderClips(jobId: string, maxClips: number = 10): Promise
     clips: any[];
     count: number;
 }> {
-    const response = await axios.post(`${API_BASE_URL}/clips/render`, {
-        jobId,
-        maxClips
-    });
-    return response.data;
+    try {
+        const response = await axios.post(`${API_BASE_URL}/clips/render`, {
+            jobId,
+            maxClips
+        });
+        return response.data;
+    } catch (err: any) {
+        console.error('FRONTEND_RENDER_ERROR FULL:', {
+            status: err.response?.status,
+            stage: err.response?.data?.stage,
+            message: err.response?.data?.message,
+            hint: err.response?.data?.hint,
+            error: err.response?.data?.error,
+            failedClips: err.response?.data?.failedClips,
+            stack: err.response?.data?.stack,
+            renderTimeMs: err.response?.data?.renderTimeMs,
+            rawData: err.response?.data,
+        });
+        throw err;
+    }
 }
 
 /**
@@ -202,12 +217,13 @@ export async function updateClipSelection(clipId: string, selected: boolean): Pr
 }
 
 /**
- * Render final video with subtitles
+ * Render final video with styled subtitles
  */
 export async function renderFinalVideo(
     clipId: string,
     language: string = 'en',
-    useEditedSubtitles: boolean = true
+    style?: SubtitleStyle,
+    enabled: boolean = true
 ): Promise<{
     success: boolean;
     clipId: string;
@@ -216,7 +232,8 @@ export async function renderFinalVideo(
 }> {
     const response = await apiClient.post(`/clips/${clipId}/render-final`, {
         language,
-        useEditedSubtitles,
+        style,
+        enabled,
     });
     return response.data;
 }
@@ -247,19 +264,65 @@ export function downloadClip(clipId: string): void {
 }
 
 /**
- * Download multiple clips as ZIP (requires auth token)
+ * Download multiple clips as a ZIP archive
  */
-export async function downloadClipsZip(clipIds: string[], token: string): Promise<Blob> {
-    const response = await axios.post(
-        `${API_BASE_URL}/clips/download-zip`,
-        { clipIds },
-        {
-            headers: {
-                Authorization: `Bearer ${token}`,
-            },
+export async function downloadClipsZip(clipIds: string[]): Promise<Blob> {
+    try {
+        const response = await axios.post(
+            `${API_BASE_URL}/clips/download-zip`,
+            { clipIds },
+            { responseType: 'blob' }
+        );
+        // #region agent log
+        fetch('http://127.0.0.1:7740/ingest/d20e865f-85ea-4423-902d-fc4a5598c54d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0170bb'},body:JSON.stringify({sessionId:'0170bb',location:'api.ts:downloadClipsZip',message:'ZIP download success',data:{blobSize:response.data?.size,contentType:response.headers?.['content-type']},timestamp:Date.now(),hypothesisId:'ZIP-H3'})}).catch(()=>{});
+        // #endregion
+        return response.data;
+    } catch (err: any) {
+        // #region agent log
+        fetch('http://127.0.0.1:7740/ingest/d20e865f-85ea-4423-902d-fc4a5598c54d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0170bb'},body:JSON.stringify({sessionId:'0170bb',location:'api.ts:downloadClipsZip-error',message:'ZIP download FAILED',data:{code:err.code,message:err.message,status:err.response?.status,responseType:typeof err.response?.data,responseHeaders:err.response?.headers?Object.fromEntries(Object.entries(err.response.headers)):null},timestamp:Date.now(),hypothesisId:'ZIP-H3'})}).catch(()=>{});
+        // #endregion
+        throw err;
+    }
+}
+
+/**
+ * Download selected clips — single file for 1 clip, ZIP for 2+.
+ * Returns a promise that resolves when the download is triggered.
+ */
+export async function downloadSelectedClips(clipIds: string[]): Promise<void> {
+    if (clipIds.length === 0) return;
+
+    if (clipIds.length === 1) {
+        const response = await axios.get(`${API_BASE_URL}/clips/${clipIds[0]}/download`, {
             responseType: 'blob',
-        }
-    );
-    return response.data;
+        });
+        const blob = response.data;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `clip_${clipIds[0]}.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        return;
+    }
+
+    const blob = await downloadClipsZip(clipIds);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `clips_${clipIds.length}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+/**
+ * Delete all files and database records for a job (cleanup after download).
+ */
+export async function cleanupJob(jobId: string): Promise<void> {
+    await axios.delete(`${API_BASE_URL}/jobs/${jobId}/cleanup`);
 }
 

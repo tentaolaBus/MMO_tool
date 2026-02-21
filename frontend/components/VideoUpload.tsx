@@ -73,7 +73,7 @@ export default function VideoUpload() {
                 // Poll for transcription completion
                 await pollJobStatus(jobId, (job) => {
                     if (job.progress) {
-                        setProgress(`Processing: ${job.progress}%`);
+                        setProgress('Processing...');
                     }
                 });
 

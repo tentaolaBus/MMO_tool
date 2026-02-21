@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { authService } from '../services/auth/authService';
-// Use SQL Server user service
-import { userServiceSql as userService, CreateUserDTO } from '../services/userServiceSql';
+// Use Supabase user service
+import { userService, CreateUserDTO } from '../services/auth/userService';
 
 /**
  * POST /api/auth/register

@@ -1,0 +1,18 @@
+{
+  "clipId": "3b2b9e7e-60f9-4a54-9450-7f6ba4fb32fb",
+  "style": {
+    "fontSize": 14,
+    "fontWeight": 700,
+    "textColor": "#ffffff",
+    "backgroundColor": "#000000",
+    "backgroundOpacity": 0.45,
+    "position": "bottom",
+    "textShadow": true,
+    "borderRadius": 6,
+    "padding": 8,
+    "letterSpacing": 0.5,
+    "lineHeight": 1.3
+  },
+  "enabled": true,
+  "updatedAt": "2026-02-20T19:40:59.366Z"
+}

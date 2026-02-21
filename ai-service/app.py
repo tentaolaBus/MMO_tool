@@ -1,8 +1,16 @@
 from flask import Flask, request, jsonify
-import os
+import os, json, time
 from config import config
 from services.audio_extractor import AudioExtractor
 from services.transcriber import Transcriber
+
+# #region agent log
+def _dbglog(loc, msg, data=None, hyp=''):
+    try:
+        with open(os.path.join(os.path.dirname(__file__), '..', 'debug-0170bb.log'), 'a') as f:
+            f.write(json.dumps({'sessionId':'0170bb','location':loc,'message':msg,'data':data or {},'timestamp':int(time.time()*1000),'hypothesisId':hyp}) + '\n')
+    except: pass
+# #endregion
 
 app = Flask(__name__)
 
@@ -48,8 +56,15 @@ def transcribe():
         job_id = data['jobId']
         video_path = data['videoPath']
         
+        # #region agent log
+        _dbglog('app.py:transcribe', 'Transcribe request received', {'jobId': job_id, 'videoPath': video_path, 'exists': os.path.exists(video_path)}, 'H4')
+        # #endregion
+        
         # Validate video file exists
         if not os.path.exists(video_path):
+            # #region agent log
+            _dbglog('app.py:transcribe', 'Video NOT found', {'videoPath': video_path}, 'H4')
+            # #endregion
             return jsonify({
                 'success': False,
                 'error': f'Video file not found: {video_path}'
@@ -66,7 +81,11 @@ def transcribe():
         
         # Step 1: Extract audio
         print("Step 1: Extracting audio...")
-        if not audio_extractor.extract_audio(video_path, audio_path):
+        audio_ok = audio_extractor.extract_audio(video_path, audio_path)
+        # #region agent log
+        _dbglog('app.py:transcribe', 'Audio extraction result', {'success': audio_ok, 'audioPath': audio_path, 'audioExists': os.path.exists(audio_path) if audio_ok else False}, 'H3')
+        # #endregion
+        if not audio_ok:
             return jsonify({
                 'success': False,
                 'error': 'Failed to extract audio from video'
@@ -74,6 +93,9 @@ def transcribe():
         
         # Step 2: Transcribe audio
         print("Step 2: Transcribing audio...")
+        # #region agent log
+        _dbglog('app.py:transcribe', 'Starting Whisper transcription', {'audioPath': audio_path}, 'H2')
+        # #endregion
         transcript_data = transcriber.transcribe(audio_path, transcript_path, job_id)
         
         print(f"Job {job_id} completed successfully")
@@ -88,6 +110,10 @@ def transcribe():
         })
         
     except Exception as e:
+        # #region agent log
+        import traceback
+        _dbglog('app.py:transcribe', 'EXCEPTION in transcription', {'error': str(e), 'traceback': traceback.format_exc()}, 'H2,H3')
+        # #endregion
         print(f"Error processing transcription: {str(e)}")
         return jsonify({
             'success': False,

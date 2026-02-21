@@ -1,11 +1,12 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Clip, SubtitleSegment } from '../lib/types';
+import { Clip, SubtitleSegment, SubtitleStyle } from '../lib/types';
 import { getSubtitles } from '../lib/api';
 import SubtitleOverlay from './SubtitleOverlay';
 import LanguageSelector from './LanguageSelector';
-import SubtitleToggle from './SubtitleToggle';
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
 
 interface ClipPreviewModalProps {
     clip: Clip | null;
@@ -17,11 +18,30 @@ interface ClipPreviewModalProps {
 export default function ClipPreviewModal({ clip, isOpen, onClose, backendUrl }: ClipPreviewModalProps) {
     const videoRef = useRef<HTMLVideoElement>(null);
     const [currentTime, setCurrentTime] = useState(0);
-    const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
     const [currentLanguage, setCurrentLanguage] = useState('en');
     const [subtitles, setSubtitles] = useState<SubtitleSegment[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [savedStyle, setSavedStyle] = useState<SubtitleStyle | null>(null);
+    const [savedEnabled, setSavedEnabled] = useState<boolean>(true);
+
+    // Load saved subtitle style when clip changes
+    useEffect(() => {
+        if (!clip) return;
+        const clipId = clip.id || `${clip.jobId}_${clip.clipIndex}`;
+        const styleUrl = `${API_BASE_URL}/clips/${clipId}/subtitle-style`;
+        fetch(styleUrl)
+            .then(r => r.json())
+            .then(json => {
+                if (json.success && json.style) {
+                    setSavedStyle(json.style);
+                } else {
+                    setSavedStyle(null);
+                }
+                setSavedEnabled(json.success && typeof json.enabled === 'boolean' ? json.enabled : true);
+            })
+            .catch(() => { setSavedStyle(null); setSavedEnabled(true); });
+    }, [clip]);
 
     // Load subtitles when clip or language changes
     useEffect(() => {
@@ -86,6 +106,8 @@ export default function ClipPreviewModal({ clip, isOpen, onClose, backendUrl }: 
             setCurrentTime(0);
             setSubtitles([]);
             setError(null);
+            setSavedStyle(null);
+            setSavedEnabled(true);
             if (videoRef.current) {
                 videoRef.current.pause();
                 videoRef.current.currentTime = 0;
@@ -97,7 +119,9 @@ export default function ClipPreviewModal({ clip, isOpen, onClose, backendUrl }: 
         return null;
     }
 
-    const videoSrc = `${backendUrl}${clip.videoUrl}`;
+    const cacheBuster = clip.updatedAt ? `?v=${new Date(clip.updatedAt).getTime()}` : '';
+    const videoSrc = (clip.videoUrl?.startsWith('http') ? clip.videoUrl : `${backendUrl}${clip.videoUrl}`) + cacheBuster;
+    console.log(`🎬 Preview modal — videoSrc: ${videoSrc} (updatedAt: ${clip.updatedAt})`);
 
     return (
         <div
@@ -135,11 +159,6 @@ export default function ClipPreviewModal({ clip, isOpen, onClose, backendUrl }: 
 
                 {/* Subtitle Controls */}
                 <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 bg-gray-800 border-b border-gray-700">
-                    <SubtitleToggle
-                        enabled={subtitlesEnabled}
-                        onToggle={() => setSubtitlesEnabled(!subtitlesEnabled)}
-                    />
-
                     <LanguageSelector
                         currentLang={currentLanguage}
                         onLanguageChange={setCurrentLanguage}
@@ -163,6 +182,7 @@ export default function ClipPreviewModal({ clip, isOpen, onClose, backendUrl }: 
                         }}
                     >
                         <video
+                            key={videoSrc}
                             ref={videoRef}
                             src={videoSrc}
                             controls
@@ -173,11 +193,12 @@ export default function ClipPreviewModal({ clip, isOpen, onClose, backendUrl }: 
                             }}
                         />
 
-                        {/* Subtitle Overlay - positioned inside video container */}
+                        {/* Subtitle Overlay — respects saved enabled/disabled setting */}
                         <SubtitleOverlay
                             segments={subtitles}
                             currentTime={currentTime}
-                            enabled={subtitlesEnabled}
+                            enabled={savedEnabled}
+                            style={savedStyle}
                         />
                     </div>
                 </div>

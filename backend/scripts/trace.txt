@@ -1,0 +1,203 @@
+================================================================
+FIRST-PRINCIPLES TRACE — 2026-02-20T12:59:57.871Z
+================================================================
+
+=== STEP 0: RAW DB — clips table (latest 10) ===
+Total returned: 10
+  [3] ID: 487aca4e-5924-4ffc-84a2-d6367dc3fafb
+      job_id:        a1405cf4-cd32-43ec-91bb-a6804c9447f3
+      video_path:    C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_a1405cf4-cd32-43ec-91bb-a6804c9447f3_3.mp4
+      cloudinary:    https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591715/mmo-video-clipper/mmo-clips/a1405cf4-cd32-43ec-91bb-a6804c9447f3_3.mp4
+      start_time:    103.04
+      end_time:      161.6
+      updated_at:    2026-02-20T12:49:12.29519+00:00
+      file_exists:   true
+
+  [2] ID: 65a18c2a-8c13-4e38-95c0-7395741b5e1c
+      job_id:        a1405cf4-cd32-43ec-91bb-a6804c9447f3
+      video_path:    C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_a1405cf4-cd32-43ec-91bb-a6804c9447f3_2.mp4
+      cloudinary:    https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591678/mmo-video-clipper/mmo-clips/a1405cf4-cd32-43ec-91bb-a6804c9447f3_2.mp4
+      start_time:    65.88
+      end_time:      101.04
+      updated_at:    2026-02-20T12:48:37.76527+00:00
+      file_exists:   true
+
+  [1] ID: 87d950c6-6e9e-4190-9ac5-58536dba8ca2
+      job_id:        a1405cf4-cd32-43ec-91bb-a6804c9447f3
+      video_path:    C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_a1405cf4-cd32-43ec-91bb-a6804c9447f3_1.mp4
+      cloudinary:    https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591659/mmo-video-clipper/mmo-clips/a1405cf4-cd32-43ec-91bb-a6804c9447f3_1.mp4
+      start_time:    38.48
+      end_time:      64
+      updated_at:    2026-02-20T12:48:11.662794+00:00
+      file_exists:   true
+
+  [0] ID: 15e1c86d-2444-4493-87c2-8a489c7aeb50
+      job_id:        a1405cf4-cd32-43ec-91bb-a6804c9447f3
+      video_path:    C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_a1405cf4-cd32-43ec-91bb-a6804c9447f3_0.mp4
+      cloudinary:    https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591660/mmo-video-clipper/mmo-clips/a1405cf4-cd32-43ec-91bb-a6804c9447f3_0.mp4
+      start_time:    0
+      end_time:      33.64
+      updated_at:    2026-02-20T12:47:55.939393+00:00
+      file_exists:   true
+
+  [3] ID: 46d0077b-7a84-4bce-822f-99c404bcc900
+      job_id:        49f831f3-b7df-4004-b63b-91ce02cbd736
+      video_path:    C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_49f831f3-b7df-4004-b63b-91ce02cbd736_3.mp4
+      cloudinary:    https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591465/mmo-video-clipper/mmo-clips/49f831f3-b7df-4004-b63b-91ce02cbd736_3.mp4
+      start_time:    103.04
+      end_time:      161.6
+      updated_at:    2026-02-20T12:44:58.349638+00:00
+      file_exists:   true
+
+  [2] ID: a975ca20-9813-4eac-bad1-ab2fbe02471d
+      job_id:        49f831f3-b7df-4004-b63b-91ce02cbd736
+      video_path:    C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_49f831f3-b7df-4004-b63b-91ce02cbd736_2.mp4
+      cloudinary:    https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591454/mmo-video-clipper/mmo-clips/49f831f3-b7df-4004-b63b-91ce02cbd736_2.mp4
+      start_time:    65.88
+      end_time:      101.04
+      updated_at:    2026-02-20T12:44:32.826108+00:00
+      file_exists:   true
+
+  [1] ID: ec5c00f2-fd4f-46b9-806f-c5fbf4bc3e91
+      job_id:        49f831f3-b7df-4004-b63b-91ce02cbd736
+      video_path:    C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_49f831f3-b7df-4004-b63b-91ce02cbd736_1.mp4
+      cloudinary:    https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591398/mmo-video-clipper/mmo-clips/49f831f3-b7df-4004-b63b-91ce02cbd736_1.mp4
+      start_time:    38.48
+      end_time:      64
+      updated_at:    2026-02-20T12:43:56.511423+00:00
+      file_exists:   true
+
+  [0] ID: bcc078dd-13a2-49cb-8719-df6e394b9818
+      job_id:        49f831f3-b7df-4004-b63b-91ce02cbd736
+      video_path:    C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_49f831f3-b7df-4004-b63b-91ce02cbd736_0.mp4
+      cloudinary:    https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591392/mmo-video-clipper/mmo-clips/49f831f3-b7df-4004-b63b-91ce02cbd736_0.mp4
+      start_time:    0
+      end_time:      33.64
+      updated_at:    2026-02-20T12:43:21.171493+00:00
+      file_exists:   true
+
+  [6] ID: 3661d791-660a-416e-8baf-ce6e82c3efca
+      job_id:        ef5de11a-f9a5-431c-8d67-fbe595262caf
+      video_path:    C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\final\3661d791-660a-416e-8baf-ce6e82c3efca_final_1771590609127.mp4
+      cloudinary:    (null)
+      start_time:    319.1
+      end_time:      364.1
+      updated_at:    2026-02-20T12:30:11.201445+00:00
+      file_exists:   true
+
+  [5] ID: f77e4676-2a7f-45b6-847f-25f91d1cdf6a
+      job_id:        ef5de11a-f9a5-431c-8d67-fbe595262caf
+      video_path:    C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_ef5de11a-f9a5-431c-8d67-fbe595262caf_5.mp4
+      cloudinary:    https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771589576/mmo-video-clipper/mmo-clips/ef5de11a-f9a5-431c-8d67-fbe595262caf_5.mp4
+      start_time:    259.1
+      end_time:      319.1
+      updated_at:    2026-02-20T12:13:19.357789+00:00
+      file_exists:   true
+
+
+Latest job ID: a1405cf4-cd32-43ec-91bb-a6804c9447f3
+
+=== STEP 1: GET /api/clips/:jobId ===
+URL: http://localhost:3001/api/clips/a1405cf4-cd32-43ec-91bb-a6804c9447f3
+Status: 200
+Success: true
+Message: (none)
+Clips count: 4
+  [0] id: 15e1c86d-2444-4493-87c2-8a489c7aeb50
+      videoUrl:   https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591660/mmo-video-clipper/mmo-clips/a1405cf4-cd32-43ec-91bb-a6804c9447f3_0.mp4
+      jobId:      a1405cf4-cd32-43ec-91bb-a6804c9447f3
+      filename:   clip_a1405cf4-cd32-43ec-91bb-a6804c9447f3_0.mp4
+      updatedAt:  2026-02-20T12:47:55.939393+00:00
+
+  [1] id: 87d950c6-6e9e-4190-9ac5-58536dba8ca2
+      videoUrl:   https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591659/mmo-video-clipper/mmo-clips/a1405cf4-cd32-43ec-91bb-a6804c9447f3_1.mp4
+      jobId:      a1405cf4-cd32-43ec-91bb-a6804c9447f3
+      filename:   clip_a1405cf4-cd32-43ec-91bb-a6804c9447f3_1.mp4
+      updatedAt:  2026-02-20T12:48:11.662794+00:00
+
+  [2] id: 65a18c2a-8c13-4e38-95c0-7395741b5e1c
+      videoUrl:   https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591678/mmo-video-clipper/mmo-clips/a1405cf4-cd32-43ec-91bb-a6804c9447f3_2.mp4
+      jobId:      a1405cf4-cd32-43ec-91bb-a6804c9447f3
+      filename:   clip_a1405cf4-cd32-43ec-91bb-a6804c9447f3_2.mp4
+      updatedAt:  2026-02-20T12:48:37.76527+00:00
+
+  [3] id: 487aca4e-5924-4ffc-84a2-d6367dc3fafb
+      videoUrl:   https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591715/mmo-video-clipper/mmo-clips/a1405cf4-cd32-43ec-91bb-a6804c9447f3_3.mp4
+      jobId:      a1405cf4-cd32-43ec-91bb-a6804c9447f3
+      filename:   clip_a1405cf4-cd32-43ec-91bb-a6804c9447f3_3.mp4
+      updatedAt:  2026-02-20T12:49:12.29519+00:00
+
+
+═══ SIMULATING USER FLOW FOR CLIP: 15e1c86d-2444-4493-87c2-8a489c7aeb50 ═══
+Job ID: a1405cf4-cd32-43ec-91bb-a6804c9447f3
+Clip Index: 0
+Video URL from API: https://res.cloudinary.com/dvm2b0y7u/video/upload/v1771591660/mmo-video-clipper/mmo-clips/a1405cf4-cd32-43ec-91bb-a6804c9447f3_0.mp4
+
+=== STEP 2a: Direct getClipById ===
+✅ getClipById SUCCESS
+   DB id:         15e1c86d-2444-4493-87c2-8a489c7aeb50
+   DB job_id:     a1405cf4-cd32-43ec-91bb-a6804c9447f3
+   DB clip_index: 0
+   DB video_path: C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_a1405cf4-cd32-43ec-91bb-a6804c9447f3_0.mp4
+   DB start_time: 0
+   DB end_time:   33.64
+
+=== STEP 2b: File existence check ===
+Convention path: C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_a1405cf4-cd32-43ec-91bb-a6804c9447f3_0.mp4
+Convention exists: true
+DB path: C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\clips\clip_a1405cf4-cd32-43ec-91bb-a6804c9447f3_0.mp4
+DB path exists: true
+
+=== STEP 3: GET /api/clips/:clipId/subtitles ===
+URL: http://localhost:3001/api/clips/15e1c86d-2444-4493-87c2-8a489c7aeb50/subtitles?lang=en
+Status: 200
+Success: true
+Cached: false
+Edited: false
+Segments: 5
+First: {"start":0,"end":7.48,"text":"All right y'all gather round gather round welcome gentlemen. What a beautiful and blessed day for an auction"}
+Last:  {"start":24.919999999999998,"end":33.64,"text":"$3 on lot a $5 $5. $5 going once twice three times sold lot a goes to the man in the black"}
+
+=== STEP 4: GET /api/clips/:clipId/subtitle-style ===
+URL: http://localhost:3001/api/clips/15e1c86d-2444-4493-87c2-8a489c7aeb50/subtitle-style
+Status: 200
+Success: true
+Has style: false
+Enabled: undefined
+
+=== STEP 5: POST /api/clips/:clipId/subtitle-style (Save Style) ===
+URL: http://localhost:3001/api/clips/15e1c86d-2444-4493-87c2-8a489c7aeb50/subtitle-style
+Status: 200
+Success: true
+Message: Style saved and video rendered
+RenderedURL: /storage/final/15e1c86d-2444-4493-87c2-8a489c7aeb50_final_1771592398969.mp4
+RenderTime: 0.1s
+ReturnedClipId: 15e1c86d-2444-4493-87c2-8a489c7aeb50
+
+=== STEP 6: Re-fetch clips after Save Style ===
+Clip 15e1c86d-2444-4493-87c2-8a489c7aeb50 videoUrl AFTER Save Style: /storage/final/15e1c86d-2444-4493-87c2-8a489c7aeb50_final_1771592398969.mp4
+Is local: true
+Is Cloudinary: false
+
+=== STEP 7: Subtitle files on disk for this job ===
+Files matching job a1405cf4-cd32-43ec-91bb-a6804c9447f3: 1
+  a1405cf4-cd32-43ec-91bb-a6804c9447f3_0_en.json
+
+=== STEP 8: Style files on disk ===
+Style file path: C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\subtitle-styles\15e1c86d-2444-4493-87c2-8a489c7aeb50.json
+Exists: true
+Style content: {"clipId":"15e1c86d-2444-4493-87c2-8a489c7aeb50","style":{"fontSize":28,"fontWeight":700,"textColor":"#FFFFFF","backgroundColor":"#000000","backgroundOpacity":0.6,"padding":10,"borderRadius":6,"textSh...
+
+=== STEP 9: Rendered files ===
+Files matching clip 15e1c86d-2444-4493-87c2-8a489c7aeb50: 1
+  15e1c86d-2444-4493-87c2-8a489c7aeb50_final_1771592398969.mp4 (5212 KB, modified: 2026-02-20T12:59:59.092Z)
+
+=== STEP 10: DB state after Save Style ===
+video_path:    C:\Users\Admin\.gemini\antigravity\scratch\MMO_tool\backend\storage\final\15e1c86d-2444-4493-87c2-8a489c7aeb50_final_1771592398969.mp4
+cloudinary:    (null)
+updated_at:    2026-02-20T13:00:01.102025+00:00
+file_exists:   true
+
+================================================================
+TRACE COMPLETE
+================================================================

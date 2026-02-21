@@ -1,6 +1,11 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import dotenv from 'dotenv';
+
+// Load environment variables FIRST
+dotenv.config();
+
 import { config } from './config';
 import uploadRoutes from './routes/upload';
 import jobsRoutes from './routes/jobs';
@@ -10,11 +15,8 @@ import authRoutes from './routes/auth';
 import { jobProcessor } from './services/processor';
 import { closeDatabase } from './services/database';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
-// Import database service - initialization happens automatically on import
+// Import database service - Supabase connection is established on import
 import './services/database';
-// Initialize SQL Server database and users table
-import { initSqlServerDatabase } from './config/sqlServer';
-initSqlServerDatabase().catch(err => console.error('SQL Server init failed:', err));
 
 const app = express();
 
@@ -23,8 +25,13 @@ app.use(cors());
 app.use(express.json());
 
 // Serve storage files (videos, clips, transcripts)
+// For /storage/final/ — disable browser caching so re-rendered videos always load fresh
+app.use('/storage/final', express.static(
+    path.join(__dirname, '../storage/final'),
+    { setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, must-revalidate') }
+));
+// For everything else under /storage/
 app.use('/storage', express.static(path.join(__dirname, '../storage')));
-app.use('/storage/final', express.static(path.join(__dirname, '../storage/final')));
 
 // API routes
 app.use('/api/auth', authRoutes);
@@ -35,7 +42,7 @@ app.use('/api/clips', subtitlesRoutes);
 
 // Health check
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', codeVersion: 'FIX_2026_02_20_V3', timestamp: new Date().toISOString() });
 });
 
 // 404 handler (must be after all routes)

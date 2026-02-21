@@ -14,7 +14,8 @@ interface ClipItemProps {
 export default function ClipItem({ clip, selected, onToggle, onPreview, backendUrl }: ClipItemProps) {
     const [isPlaying, setIsPlaying] = useState(false);
 
-    const videoSrc = `${backendUrl}${clip.videoUrl}`;
+    const cacheBuster = clip.updatedAt ? `?v=${new Date(clip.updatedAt).getTime()}` : '';
+    const videoSrc = (clip.videoUrl?.startsWith('http') ? clip.videoUrl : `${backendUrl}${clip.videoUrl}`) + cacheBuster;
     const duration = clip.duration ? `${Math.round(clip.duration)}s` : 'N/A';
     const score = clip.score?.total || 0;
 
@@ -53,6 +54,7 @@ export default function ClipItem({ clip, selected, onToggle, onPreview, backendU
                 onMouseLeave={() => setIsPlaying(false)}
             >
                 <video
+                    key={videoSrc}
                     src={videoSrc}
                     className="w-full h-full object-contain"
                     loop
@@ -90,7 +92,7 @@ export default function ClipItem({ clip, selected, onToggle, onPreview, backendU
 
             {/* Edit Subtitles Button */}
             <a
-                href={`/job/${clip.jobId}/edit/${clip.jobId}_${clip.clipIndex}`}
+                href={`/job/${clip.jobId}/edit/${clip.id}`}
                 className="block w-full px-4 py-2 bg-purple-600 text-white hover:bg-purple-700 transition font-medium text-sm text-center"
             >
                 ✏️ Edit Subtitles

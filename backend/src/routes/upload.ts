@@ -162,10 +162,37 @@ router.post('/youtube', async (req: Request, res: Response) => {
             message: 'YouTube video downloaded and queued for processing',
         });
     } catch (error: any) {
-        console.error('YouTube upload error:', error);
+        const errMsg = error.message || 'Failed to download YouTube video';
+        console.error('❌ YouTube upload error:', errMsg);
+
+        // Categorize the error for the frontend
+        let category = 'download_failed';
+        let hint = 'Please try again or use a different video.';
+
+        if (errMsg.includes('Invalid YouTube URL')) {
+            category = 'invalid_url';
+            hint = 'The URL does not appear to be a valid YouTube link.';
+        } else if (errMsg.includes('Private video') || errMsg.includes('Video unavailable')) {
+            category = 'video_unavailable';
+            hint = 'This video is private or unavailable. Try a public video.';
+        } else if (errMsg.includes('Sign in') || errMsg.includes('bot') || errMsg.includes('confirm')) {
+            category = 'bot_detected';
+            hint = 'YouTube bot detection triggered. Try updating yt-dlp: pip install -U yt-dlp';
+        } else if (errMsg.includes('format') || errMsg.includes('Requested format')) {
+            category = 'format_error';
+            hint = 'Video format issue. Please try a different video.';
+        } else if (errMsg.includes('not found') || errMsg.includes('empty')) {
+            category = 'file_error';
+            hint = 'Download completed but output file was not created. Check disk space.';
+        }
+
         res.status(500).json({
             success: false,
-            message: error.message || 'Failed to download YouTube video',
+            message: hint,
+            error: {
+                category,
+                detail: errMsg.slice(0, 500),
+            },
         });
     }
 });
