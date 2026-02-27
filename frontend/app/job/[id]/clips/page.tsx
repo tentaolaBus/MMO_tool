@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { useParams, useRouter, usePathname } from 'next/navigation';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useParams, useRouter } from 'next/navigation';
 import VideoPlayer from '../../../../components/VideoPlayer';
 import ClipList from '../../../../components/ClipList';
 import ClipPreviewModal from '../../../../components/ClipPreviewModal';
@@ -13,7 +13,6 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'htt
 export default function ClipsPage() {
     const params = useParams();
     const router = useRouter();
-    const pathname = usePathname();
     const jobId = params.id as string;
 
     const [job, setJob] = useState<any>(null);
@@ -24,69 +23,59 @@ export default function ClipsPage() {
     const [rendering, setRendering] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [downloading, setDownloading] = useState(false);
-    const [refreshKey, setRefreshKey] = useState(0);
 
-    // Refetch clips whenever this page becomes active via client-side navigation
-    // (e.g., returning from subtitle editor after Save Style)
+    // Stable fetch function that can be called from effects and event handlers
+    const loadJobAndClips = useCallback(async () => {
+        try {
+            const jobData = await getJobStatus(jobId);
+            setJob(jobData);
+
+            if (jobData.status !== 'completed') {
+                setError('Transcription not yet complete. Please wait.');
+                setLoading(false);
+                return;
+            }
+
+            // Try to load existing clips from database first
+            const clipsData = await getClips(jobId);
+
+            if (clipsData.success && clipsData.clips && clipsData.clips.length > 0) {
+                console.log(`Loaded ${clipsData.clips.length} clips from database`);
+                clipsData.clips.forEach((c: any) => {
+                    console.log(`  📋 Clip ${c.clipIndex}: videoUrl=${c.videoUrl} updatedAt=${c.updatedAt}`);
+                });
+                setClips(clipsData.clips);
+                // Restore selection from database
+                const selected = new Set(
+                    clipsData.clips.filter((c: any) => c.selected).map((c: any) => c.id)
+                );
+                setSelectedClips(selected);
+                setLoading(false);
+            } else {
+                // No clips in DB, render new ones
+                console.log('No clips found, starting render...');
+                await handleRenderClips();
+            }
+        } catch (err: any) {
+            setError(err.message || 'Failed to load job');
+            setLoading(false);
+        }
+    }, [jobId]);
+
+    // Load data once when component mounts or jobId changes
     useEffect(() => {
-        setRefreshKey(k => k + 1);
-    }, [pathname]);
+        loadJobAndClips();
+    }, [loadJobAndClips]);
 
     // Re-fetch clips when the tab regains focus (e.g., returning from edit page)
     useEffect(() => {
         const handleFocus = () => {
             console.log('🔄 Tab focused — refreshing clips');
-            setRefreshKey(k => k + 1);
+            loadJobAndClips();
         };
         window.addEventListener('focus', handleFocus);
         return () => window.removeEventListener('focus', handleFocus);
-    }, []);
-
-    // Load job details and clips from database
-    useEffect(() => {
-        const loadJobAndClips = async () => {
-            try {
-                const jobData = await getJobStatus(jobId);
-                setJob(jobData);
-
-                if (jobData.status !== 'completed') {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7740/ingest/d20e865f-85ea-4423-902d-fc4a5598c54d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0170bb'},body:JSON.stringify({sessionId:'0170bb',location:'clips/page.tsx:52',message:'Job not completed',data:{jobId:jobId,status:jobData.status,error:jobData.error},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-                    // #endregion
-                    setError('Transcription not yet complete. Please wait.');
-                    setLoading(false);
-                    return;
-                }
-
-                // Try to load existing clips from database first
-                const clipsData = await getClips(jobId);
-
-                if (clipsData.success && clipsData.clips && clipsData.clips.length > 0) {
-                    console.log(`Loaded ${clipsData.clips.length} clips from database`);
-                    // DIAGNOSTIC: Log video URLs and timestamps to verify fresh data
-                    clipsData.clips.forEach((c: any) => {
-                        console.log(`  📋 Clip ${c.clipIndex}: videoUrl=${c.videoUrl} updatedAt=${c.updatedAt}`);
-                    });
-                    setClips(clipsData.clips);
-                    // Restore selection from database
-                    const selected = new Set(
-                        clipsData.clips.filter((c: any) => c.selected).map((c: any) => c.id)
-                    );
-                    setSelectedClips(selected);
-                    setLoading(false);
-                } else {
-                    // No clips in DB, render new ones
-                    console.log('No clips found, starting render...');
-                    await handleRenderClips();
-                }
-            } catch (err: any) {
-                setError(err.message || 'Failed to load job');
-                setLoading(false);
-            }
-        };
-
-        loadJobAndClips();
-    }, [jobId, refreshKey]);
+    }, [loadJobAndClips]);
 
     // Render clips (only called if no clips in DB)
     const handleRenderClips = async () => {
