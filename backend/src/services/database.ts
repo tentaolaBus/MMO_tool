@@ -65,7 +65,6 @@ export const queries = {
 
     async insertClip(
         id: string, jobId: string, clipIndex: number, videoPath: string,
-        cloudinaryPublicId: string | null, cloudinaryUrl: string | null,
         startTime: number, endTime: number, duration: number, text: string,
         scoreTotal: number | null, scoreDuration: number | null,
         scoreKeyword: number | null, scoreCompleteness: number | null,
@@ -73,7 +72,6 @@ export const queries = {
     ) {
         const { error } = await supabase.from('clips').upsert({
             id, job_id: jobId, clip_index: clipIndex, video_path: videoPath,
-            cloudinary_public_id: cloudinaryPublicId, cloudinary_url: cloudinaryUrl,
             start_time: startTime, end_time: endTime, duration, text,
             score_total: scoreTotal, score_duration: scoreDuration,
             score_keyword: scoreKeyword, score_completeness: scoreCompleteness,
@@ -82,13 +80,7 @@ export const queries = {
         if (error) throw new Error(`insertClip failed: ${error.message}`);
     },
 
-    async updateClipCloudinary(publicId: string, url: string, id: string) {
-        const { error } = await supabase
-            .from('clips')
-            .update({ cloudinary_public_id: publicId, cloudinary_url: url })
-            .eq('id', id);
-        if (error) throw new Error(`updateClipCloudinary failed: ${error.message}`);
-    },
+
 
     async getClipsByJob(jobId: string) {
         const { data, error } = await supabase
@@ -155,14 +147,10 @@ export const queries = {
     },
 
     async updateClipVideoPath(videoPath: string, id: string) {
-        // Clear Cloudinary fields — the fresh local render is now authoritative.
-        // buildVideoUrl() prefers cloudinary_url, so leaving it would serve the OLD video.
         const { error } = await supabase
             .from('clips')
             .update({
                 video_path: videoPath,
-                cloudinary_url: null,
-                cloudinary_public_id: null,
                 updated_at: new Date().toISOString(),
             })
             .eq('id', id);

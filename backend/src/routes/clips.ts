@@ -8,11 +8,11 @@ import { queries } from '../services/database';
 import { Transcript } from '../models/job';
 import { ClipCandidate, ClipAnalysisResult } from '../models/clip';
 import { v4 as uuidv4 } from 'uuid';
-import { cloudinaryService } from '../services/cloudinaryService';
+
 
 // #region agent log
 const _dbglog = (loc: string, msg: string, data: any = {}, hyp: string = '') => {
-    try { fs.appendFileSync(path.resolve(__dirname, '../../..', 'debug-0170bb.log'), JSON.stringify({sessionId:'0170bb',location:loc,message:msg,data,timestamp:Date.now(),hypothesisId:hyp}) + '\n'); } catch {}
+    try { fs.appendFileSync(path.resolve(__dirname, '../../..', 'debug-0170bb.log'), JSON.stringify({ sessionId: '0170bb', location: loc, message: msg, data, timestamp: Date.now(), hypothesisId: hyp }) + '\n'); } catch { }
 };
 // #endregion
 
@@ -35,17 +35,10 @@ function safeParseKeywords(keywords: any): string[] {
 
 /**
  * Build a videoUrl from a clip row.
- * After Save Style re-renders a clip, the local _final file is authoritative —
- * the Cloudinary URL still points to the ORIGINAL video without burned-in subtitles.
- * So we ONLY use Cloudinary for clips that have never been re-rendered.
+ * Always resolves to a local storage path.
  */
 function buildVideoUrl(clip: any): string {
     const vp = clip.video_path || '';
-    const isRendered = vp.includes('_final');
-
-    // For re-rendered clips: ALWAYS use local path (it has the styled subtitles)
-    // For original clips: prefer Cloudinary for faster streaming
-    if (!isRendered && clip.cloudinary_url) return clip.cloudinary_url;
 
     // Local storage path
     if (vp.includes('storage')) {
@@ -61,8 +54,6 @@ interface ClipRow {
     job_id: string;
     clip_index: number;
     video_path: string;
-    cloudinary_public_id: string | null;
-    cloudinary_url: string | null;
     start_time: number;
     end_time: number;
     duration: number;
@@ -194,7 +185,6 @@ router.post('/render', async (req: Request, res: Response) => {
                         clipIndex: c.clip_index,
                         videoPath: c.video_path,
                         videoUrl: buildVideoUrl(c),
-                        cloudinaryUrl: c.cloudinary_url || null,
                         filename: path.basename(c.video_path || ''),
                         startTime: c.start_time,
                         endTime: c.end_time,
@@ -402,13 +392,11 @@ router.post('/render', async (req: Request, res: Response) => {
         console.log(`   Clips to render: ${clipsToRender.length}`);
         console.log('   ✅ STAGE 5 PASSED');
 
-        // ===== STAGE 6: RENDER CLIPS (FFmpeg + Cloudinary) =====
+        // ===== STAGE 6: RENDER CLIPS (FFmpeg) =====
         currentStage = 'STAGE_6_RENDER_CLIPS';
         console.log('\n🎬 STAGE 6: Rendering clips with FFmpeg...');
         const generatedClips: any[] = [];
         const failedClips: Array<{ index: number; error: string; stage: string }> = [];
-        const isCloudinaryConfigured = cloudinaryService.isConfigured();
-        console.log(`   Cloudinary configured: ${isCloudinaryConfigured}`);
 
         for (let i = 0; i < clipsToRender.length; i++) {
             const candidate = clipsToRender[i];
@@ -428,35 +416,15 @@ router.post('/render', async (req: Request, res: Response) => {
                 console.log(`   [6a] ✅ Clip file: ${path.basename(clipPath)}`);
 
                 const clipId = uuidv4();
-                let cloudinaryPublicId: string | null = null;
-                let cloudinaryUrl: string | null = null;
 
-                // 6b: Upload to Cloudinary if configured
-                if (isCloudinaryConfigured) {
-                    try {
-                        console.log(`   [6b] Cloudinary uploading...`);
-                        const uploadResult = await cloudinaryService.uploadClip(clipPath, `${jobId}_${i}`);
-                        cloudinaryPublicId = uploadResult.publicId;
-                        cloudinaryUrl = uploadResult.secureUrl;
-                        console.log(`   [6b] ✅ Cloudinary URL: ${cloudinaryUrl}`);
-                        // NOTE: Do NOT delete local file — Save Style endpoint needs it for FFmpeg
-                    } catch (cloudinaryError: any) {
-                        console.error(`   [6b] ⚠️ Cloudinary failed (non-fatal): ${cloudinaryError.message}`);
-                    }
-                }
-
-                // 6c: Save to Supabase
-                // ALWAYS store LOCAL disk path in video_path (needed by Save Style for FFmpeg)
-                // Frontend uses cloudinary_url via buildVideoUrl() helper
-                console.log(`   [6c] Saving to Supabase (video_path: local disk, cloudinary_url: ${cloudinaryUrl ? 'yes' : 'no'})...`);
+                // 6b: Save to Supabase
+                console.log(`   [6b] Saving to Supabase (video_path: local disk)...`);
                 try {
                     await queries.insertClip(
                         clipId,
                         jobId,
                         i,
                         clipPath,
-                        cloudinaryPublicId,
-                        cloudinaryUrl,
                         candidate.startTime,
                         candidate.endTime,
                         candidate.duration,
@@ -469,16 +437,16 @@ router.post('/render', async (req: Request, res: Response) => {
                         0,
                         1
                     );
-                    console.log(`   [6c] ✅ Supabase insert success (clipId: ${clipId})`);
+                    console.log(`   [6b] ✅ Supabase insert success (clipId: ${clipId})`);
                 } catch (dbInsertError: any) {
-                    console.error(`   [6c] ❌ SUPABASE INSERT FAILED for clip ${i}`);
-                    console.error(`   [6c] Error: ${dbInsertError.message}`);
-                    console.error(`   [6c] Full error:`, JSON.stringify(dbInsertError, null, 2));
-                    failedClips.push({ index: i, error: `Supabase insert: ${dbInsertError.message}`, stage: 'STAGE_6c_DB_INSERT' });
+                    console.error(`   [6b] ❌ SUPABASE INSERT FAILED for clip ${i}`);
+                    console.error(`   [6b] Error: ${dbInsertError.message}`);
+                    console.error(`   [6b] Full error:`, JSON.stringify(dbInsertError, null, 2));
+                    failedClips.push({ index: i, error: `Supabase insert: ${dbInsertError.message}`, stage: 'STAGE_6b_DB_INSERT' });
                     continue;
                 }
 
-                const videoUrl = cloudinaryUrl || `/storage/clips/${path.basename(clipPath)}`;
+                const videoUrl = `/storage/clips/${path.basename(clipPath)}`;
 
                 generatedClips.push({
                     id: clipId,
@@ -486,7 +454,6 @@ router.post('/render', async (req: Request, res: Response) => {
                     clipIndex: i,
                     videoPath: clipPath,
                     videoUrl: videoUrl,
-                    cloudinaryUrl: cloudinaryUrl,
                     filename: path.basename(clipPath),
                     startTime: candidate.startTime,
                     endTime: candidate.endTime,
@@ -500,7 +467,7 @@ router.post('/render', async (req: Request, res: Response) => {
                 console.error(`   ❌ Clip ${i} FAILED`);
                 console.error(`   Error: ${clipError.message}`);
                 if (clipError.stderr) console.error(`   FFmpeg stderr: ${clipError.stderr.slice(-300)}`);
-                failedClips.push({ index: i, error: clipError.message, stage: 'STAGE_6a_FFMPEG' });
+                failedClips.push({ index: i, error: clipError.message, stage: 'STAGE_6_FFMPEG' });
             }
         }
 
@@ -538,7 +505,7 @@ router.post('/render', async (req: Request, res: Response) => {
                     clipIndex: typeof clip.clipIndex === 'number' ? clip.clipIndex : idx,
                     videoPath: typeof clip.videoPath === 'string' ? clip.videoPath : '',
                     videoUrl: typeof clip.videoUrl === 'string' ? clip.videoUrl : '',
-                    cloudinaryUrl: clip.cloudinaryUrl || null,
+
                     filename: typeof clip.filename === 'string' ? clip.filename : '',
                     startTime: clip.startTime ?? 0,
                     endTime: clip.endTime ?? 0,
@@ -652,7 +619,6 @@ router.get('/:jobId', async (req: Request, res: Response) => {
             clipIndex: c.clip_index,
             videoPath: c.video_path,
             videoUrl: buildVideoUrl(c),
-            cloudinaryUrl: c.cloudinary_url || null,
             filename: path.basename(c.video_path || ''),
             startTime: c.start_time,
             endTime: c.end_time,
@@ -775,12 +741,7 @@ router.get('/:clipId/download', async (req: Request, res: Response) => {
             });
         }
 
-        // Prefer Cloudinary URL if available
-        if (clip.cloudinary_url) {
-            return res.redirect(clip.cloudinary_url);
-        }
-
-        // Fall back to local file
+        // Serve local file
         const clipPath = clip.video_path;
         if (!fs.existsSync(clipPath)) {
             return res.status(404).json({
@@ -836,7 +797,7 @@ router.post('/download-zip', async (req: Request, res: Response) => {
         for (const clipId of clipIds) {
             const clip = await queries.getClipById(clipId) as ClipRow | undefined;
             // #region agent log
-            _dbglog('clips.ts:zip-lookup', 'Clip lookup for ZIP', {clipId, found:!!clip, videoPath:clip?.video_path||null, fileExists:clip?fs.existsSync(clip.video_path):false, fileSize:clip&&fs.existsSync(clip.video_path)?fs.statSync(clip.video_path).size:0}, 'ZIP-H1');
+            _dbglog('clips.ts:zip-lookup', 'Clip lookup for ZIP', { clipId, found: !!clip, videoPath: clip?.video_path || null, fileExists: clip ? fs.existsSync(clip.video_path) : false, fileSize: clip && fs.existsSync(clip.video_path) ? fs.statSync(clip.video_path).size : 0 }, 'ZIP-H1');
             // #endregion
             if (clip && fs.existsSync(clip.video_path)) {
                 clipPaths.push(clip.video_path);
@@ -845,7 +806,7 @@ router.post('/download-zip', async (req: Request, res: Response) => {
         }
 
         // #region agent log
-        _dbglog('clips.ts:zip-paths', 'Clip paths resolved', {clipPathCount:clipPaths.length, clipPaths, jobId}, 'ZIP-H1');
+        _dbglog('clips.ts:zip-paths', 'Clip paths resolved', { clipPathCount: clipPaths.length, clipPaths, jobId }, 'ZIP-H1');
         // #endregion
 
         if (clipPaths.length === 0) {
@@ -868,14 +829,14 @@ router.post('/download-zip', async (req: Request, res: Response) => {
 
         zipStream.on('end', () => {
             // #region agent log
-            _dbglog('clips.ts:zip-end', 'ZIP stream ended successfully', {clipPathCount:clipPaths.length}, 'ZIP-H2');
+            _dbglog('clips.ts:zip-end', 'ZIP stream ended successfully', { clipPathCount: clipPaths.length }, 'ZIP-H2');
             // #endregion
             console.log('📦 ZIP stream completed successfully');
         });
 
         zipStream.on('error', (err: Error) => {
             // #region agent log
-            _dbglog('clips.ts:zip-error', 'ZIP stream ERROR', {error:err.message,stack:err.stack}, 'ZIP-H2');
+            _dbglog('clips.ts:zip-error', 'ZIP stream ERROR', { error: err.message, stack: err.stack }, 'ZIP-H2');
             // #endregion
             console.error('ZIP stream error:', err);
             if (!res.headersSent) {
@@ -888,7 +849,7 @@ router.post('/download-zip', async (req: Request, res: Response) => {
 
         res.on('close', () => {
             // #region agent log
-            _dbglog('clips.ts:res-close', 'Response closed', {headersSent:res.headersSent,writableEnded:res.writableEnded,statusCode:res.statusCode}, 'ZIP-H3');
+            _dbglog('clips.ts:res-close', 'Response closed', { headersSent: res.headersSent, writableEnded: res.writableEnded, statusCode: res.statusCode }, 'ZIP-H3');
             // #endregion
         });
 
@@ -896,7 +857,7 @@ router.post('/download-zip', async (req: Request, res: Response) => {
 
     } catch (error: any) {
         // #region agent log
-        _dbglog('clips.ts:zip-catch', 'ZIP endpoint CATCH error', {error:error.message,stack:error.stack}, 'ZIP-H2');
+        _dbglog('clips.ts:zip-catch', 'ZIP endpoint CATCH error', { error: error.message, stack: error.stack }, 'ZIP-H2');
         // #endregion
         console.error('ZIP download error:', error);
         res.status(500).json({

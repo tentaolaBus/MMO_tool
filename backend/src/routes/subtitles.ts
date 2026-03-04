@@ -271,7 +271,6 @@ router.post('/:clipId/subtitle-style', async (req: Request, res: Response) => {
 
         interface ClipRow {
             id: string; job_id: string; clip_index: number; video_path: string;
-            cloudinary_url: string | null;
         }
 
         const clip = await queries.getClipById(clipId) as ClipRow | undefined;
@@ -287,7 +286,6 @@ router.post('/:clipId/subtitle-style', async (req: Request, res: Response) => {
 
         console.log(`🔍 Save Style — resolving clip path:`);
         console.log(`   DB video_path:     ${clip.video_path}`);
-        console.log(`   DB cloudinary_url: ${clip.cloudinary_url}`);
         console.log(`   Convention path:   ${clipPath}`);
         console.log(`   Convention exists: ${fs.existsSync(clipPath)}`);
 
