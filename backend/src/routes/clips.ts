@@ -245,6 +245,34 @@ router.post('/render', async (req: Request, res: Response) => {
         console.log(`     transcriptPath: ${job.transcriptPath ?? 'NULL ⚠️'}`);
         console.log('   ✅ STAGE 2 PASSED');
 
+        // ===== STAGE 2.5: CHECK JOB STATUS =====
+        currentStage = 'STAGE_2_5_CHECK_STATUS';
+        console.log(`\n⏳ STAGE 2.5: Checking job processing status...`);
+        console.log(`   Current status: ${job.status}`);
+
+        if (job.status === 'pending' || job.status === 'processing') {
+            console.log(`   ⏳ Job still ${job.status} — returning 202 (retry later)`);
+            return res.status(202).json({
+                success: false,
+                status: job.status,
+                progress: job.progress || 0,
+                message: `Transcription still in progress (${job.status}).`,
+                retryAfterMs: 5000
+            });
+        }
+
+        if (job.status === 'failed') {
+            console.log(`   ❌ Job failed: ${job.error}`);
+            return res.status(422).json({
+                success: false,
+                status: 'failed',
+                message: job.error || 'Transcription failed',
+                hint: 'Re-upload the video to try again'
+            });
+        }
+
+        console.log('   ✅ STAGE 2.5 PASSED (status: completed)');
+
         // ===== STAGE 3: ENSURE JOB IN DATABASE =====
         currentStage = 'STAGE_3_ENSURE_JOB_IN_DB';
         console.log(`\n💾 STAGE 3: Ensuring job exists in Supabase (jobId: ${jobId})...`);

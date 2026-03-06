@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import VideoPlayer from '../../../../components/VideoPlayer';
 import ClipList from '../../../../components/ClipList';
 import ClipPreviewModal from '../../../../components/ClipPreviewModal';
-import { getJobStatus, getClips, renderClips, updateClipSelection, downloadSelectedClips, cleanupJob } from '../../../../lib/api';
+import { getJobStatus, getClips, renderClips, updateClipSelection, downloadSelectedClips, cleanupJob, pollJobStatus } from '../../../../lib/api';
 import { Clip } from '../../../../lib/types';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3001';
@@ -27,16 +27,31 @@ export default function ClipsPage() {
     // Stable fetch function that can be called from effects and event handlers
     const loadJobAndClips = useCallback(async () => {
         try {
-            const jobData = await getJobStatus(jobId);
+            let jobData = await getJobStatus(jobId);
             setJob(jobData);
 
-            if (jobData.status !== 'completed') {
-                setError('Transcription not yet complete. Please wait.');
+            // If job is still processing, poll until it finishes
+            if (jobData.status === 'pending' || jobData.status === 'processing') {
+                console.log(`Job ${jobId} still ${jobData.status}, polling for completion...`);
+                jobData = await pollJobStatus(jobId, (j) => {
+                    setJob(j);
+                });
+            }
+
+            // Handle permanently failed jobs
+            if (jobData.status === 'failed') {
+                setError(jobData.error || 'Transcription failed. Please re-upload the video.');
                 setLoading(false);
                 return;
             }
 
-            // Try to load existing clips from database first
+            if (jobData.status !== 'completed') {
+                setError(`Unexpected job status: ${jobData.status}`);
+                setLoading(false);
+                return;
+            }
+
+            // Job completed — try to load existing clips from database first
             const clipsData = await getClips(jobId);
 
             if (clipsData.success && clipsData.clips && clipsData.clips.length > 0) {
@@ -209,13 +224,19 @@ export default function ClipsPage() {
     }
 
     if (loading || rendering) {
+        const statusText = rendering
+            ? 'Generating clips...'
+            : job?.status === 'processing'
+                ? `Transcribing video... ${job?.progress || 0}%`
+                : job?.status === 'pending'
+                    ? 'Waiting for processing to start...'
+                    : 'Loading...';
+
         return (
             <div className="flex items-center justify-center min-h-screen">
                 <div className="text-center">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-                    <p className="text-gray-600">
-                        {rendering ? 'Generating clips...' : 'Loading...'}
-                    </p>
+                    <p className="text-gray-600">{statusText}</p>
                 </div>
             </div>
         );

@@ -1,8 +1,28 @@
 from flask import Flask, request, jsonify
-import os, json, time
+import os, sys, json, time
 from config import config
 from services.audio_extractor import AudioExtractor
 from services.transcriber import Transcriber
+
+# On Windows, Flask's debug reloader breaks sys.stderr's pipe handle.
+# tqdm (used by Whisper) calls sys.stderr.flush() which raises
+# OSError: [Errno 22] Invalid argument. This wrapper absorbs that.
+if sys.platform == 'win32':
+    _original_stderr = sys.stderr
+    class _SafeStderr:
+        def write(self, s):
+            try:
+                return _original_stderr.write(s)
+            except OSError:
+                return len(s) if isinstance(s, str) else 0
+        def flush(self):
+            try:
+                _original_stderr.flush()
+            except OSError:
+                pass
+        def __getattr__(self, name):
+            return getattr(_original_stderr, name)
+    sys.stderr = _SafeStderr()
 
 # #region agent log
 def _dbglog(loc, msg, data=None, hyp=''):
@@ -70,9 +90,12 @@ def transcribe():
                 'error': f'Video file not found: {video_path}'
             }), 404
         
-        # Generate output paths
-        audio_path = os.path.join(config.STORAGE_DIR, 'audio', f'{job_id}.mp3')
-        transcript_path = os.path.join(config.STORAGE_DIR, 'transcripts', f'{job_id}.json')
+        # Derive storage dir from the video path so audio/transcript land in
+        # the same storage tree the backend uses, regardless of AI service CWD.
+        # video_path = .../storage/videos/{id}.mp4  →  storage_base = .../storage
+        storage_base = os.path.dirname(os.path.dirname(os.path.abspath(video_path)))
+        audio_path = os.path.join(storage_base, 'audio', f'{job_id}.mp3')
+        transcript_path = os.path.join(storage_base, 'transcripts', f'{job_id}.json')
         
         print(f"Processing job {job_id}")
         print(f"Video: {video_path}")

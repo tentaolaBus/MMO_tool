@@ -71,11 +71,16 @@ export default function VideoUpload() {
                 setProgress('Processing video...');
 
                 // Poll for transcription completion
-                await pollJobStatus(jobId, (job) => {
-                    if (job.progress) {
-                        setProgress('Processing...');
-                    }
+                const completedJob = await pollJobStatus(jobId, (job) => {
+                    const pct = job.progress || 0;
+                    setProgress(`Processing... ${pct}%`);
                 });
+
+                // Only navigate if transcription succeeded
+                if (completedJob.status === 'failed') {
+                    setError(completedJob.error || 'Video processing failed. Please try again.');
+                    return;
+                }
 
                 // Redirect to clips page
                 router.push(`/job/${jobId}/clips`);

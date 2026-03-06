@@ -137,34 +137,63 @@ export async function pollJobStatus(
 }
 
 /**
- * Render clips for a job
+ * Render clips for a job.
+ * Automatically retries when backend returns 202 (transcription still in progress).
  */
-export async function renderClips(jobId: string, maxClips: number = 10): Promise<{
+export async function renderClips(
+    jobId: string,
+    maxClips: number = 10,
+    onProgress?: (status: string, progress: number) => void
+): Promise<{
     success: boolean;
     jobId: string;
     clips: any[];
     count: number;
 }> {
-    try {
-        const response = await axios.post(`${API_BASE_URL}/clips/render`, {
-            jobId,
-            maxClips
-        });
-        return response.data;
-    } catch (err: any) {
-        console.error('FRONTEND_RENDER_ERROR FULL:', {
-            status: err.response?.status,
-            stage: err.response?.data?.stage,
-            message: err.response?.data?.message,
-            hint: err.response?.data?.hint,
-            error: err.response?.data?.error,
-            failedClips: err.response?.data?.failedClips,
-            stack: err.response?.data?.stack,
-            renderTimeMs: err.response?.data?.renderTimeMs,
-            rawData: err.response?.data,
-        });
-        throw err;
+    const MAX_RETRIES = 90; // 90 × 5 s ≈ 7.5 min max wait
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const response = await axios.post(`${API_BASE_URL}/clips/render`, {
+                jobId,
+                maxClips
+            });
+
+            // 202 = transcription still in progress — wait and retry
+            if (response.status === 202) {
+                const waitMs = response.data?.retryAfterMs || 5000;
+                const pct = response.data?.progress || 0;
+                console.log(`⏳ Transcription in progress (${pct}%), retry ${attempt + 1}/${MAX_RETRIES}...`);
+                onProgress?.(response.data?.status || 'processing', pct);
+                await new Promise(r => setTimeout(r, waitMs));
+                continue;
+            }
+
+            return response.data;
+        } catch (err: any) {
+            // 422 = job failed permanently — don't retry
+            if (err.response?.status === 422) {
+                const msg = err.response?.data?.message || 'Transcription failed';
+                console.error('Transcription failed permanently:', msg);
+                throw new Error(msg);
+            }
+
+            console.error('FRONTEND_RENDER_ERROR FULL:', {
+                status: err.response?.status,
+                stage: err.response?.data?.stage,
+                message: err.response?.data?.message,
+                hint: err.response?.data?.hint,
+                error: err.response?.data?.error,
+                failedClips: err.response?.data?.failedClips,
+                stack: err.response?.data?.stack,
+                renderTimeMs: err.response?.data?.renderTimeMs,
+                rawData: err.response?.data,
+            });
+            throw err;
+        }
     }
+
+    throw new Error('Transcription timed out. Please try re-uploading the video.');
 }
 
 /**

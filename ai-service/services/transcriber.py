@@ -35,9 +35,11 @@ class Transcriber:
             print(f"Transcribing audio: {audio_path}")
             
             # Transcribe using Whisper
+            # verbose=None disables tqdm progress bar, which crashes on Windows
+            # under Flask's debug reloader (broken sys.stderr pipe handle).
             result = self.model.transcribe(
                 audio_path,
-                verbose=False,
+                verbose=None,
                 language=None,  # Auto-detect language
             )
             

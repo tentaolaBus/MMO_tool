@@ -59,45 +59,38 @@ class JobProcessor {
         this.isProcessing = true;
 
         try {
-            console.log(`Processing job ${job.id}`);
+            console.log(`\n🔄 ====== PROCESSING JOB ${job.id} ======`);
 
-            // Update job status to processing
+            // STAGE: Transcription
+            console.log(`   [STAGE] transcribing — calling AI service...`);
             jobQueue.updateJob(job.id, { status: 'processing', progress: 10 });
 
-            // #region agent log
-            _dbglog('processor.ts:60', 'Calling AI service', {jobId:job.id,videoPath:job.videoPath,aiUrl:`${config.aiServiceUrl}/transcribe`}, 'H2,H3,H4');
-            // #endregion
-
-            // Call AI service to transcribe
             const response = await axios.post(`${config.aiServiceUrl}/transcribe`, {
                 jobId: job.id,
                 videoPath: job.videoPath,
             });
 
-            // #region agent log
-            _dbglog('processor.ts:70', 'AI service response', {success:response.data.success,audioPath:response.data.audioPath,error:response.data.error}, 'H2,H3');
-            // #endregion
+            console.log(`   [STAGE] AI response — success=${response.data.success}`);
 
             if (response.data.success) {
-                // Update job with results
                 jobQueue.updateJob(job.id, {
                     status: 'completed',
                     progress: 100,
                     audioPath: response.data.audioPath,
                     transcriptPath: response.data.transcriptPath,
                 });
-                console.log(`Job ${job.id} completed successfully`);
+                console.log(`   [STAGE] completed — transcript: ${response.data.transcriptPath}`);
+                console.log(`   ✅ Job ${job.id} DONE\n`);
             } else {
-                throw new Error('AI service returned unsuccessful response');
+                throw new Error(response.data.error || 'AI service returned unsuccessful response');
             }
         } catch (error: any) {
-            // #region agent log
-            _dbglog('processor.ts:85', 'Job processing FAILED', {jobId:job.id,errorMessage:error.message,responseData:error.response?.data,responseStatus:error.response?.status}, 'H2,H3,H4');
-            // #endregion
-            console.error(`Job ${job.id} failed:`, error.message);
+            const errDetail = error.response?.data?.error || error.message || 'Unknown error';
+            console.error(`   [STAGE] FAILED — ${errDetail}`);
+            console.error(`   ❌ Job ${job.id} FAILED\n`);
             jobQueue.updateJob(job.id, {
                 status: 'failed',
-                error: error.message || 'Unknown error occurred',
+                error: errDetail,
             });
         } finally {
             this.isProcessing = false;
