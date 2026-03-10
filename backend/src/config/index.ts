@@ -1,6 +1,6 @@
 // Configuration for the backend service
 export const config = {
-    port: Number(process.env.PORT) || 3001,
+    port: Number(process.env.PORT) || 10000,
     aiServiceUrl: process.env.AI_SERVICE_URL || 'http://localhost:5000',
     uploadDir: './uploads',
     storageDir: './storage',
