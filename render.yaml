@@ -1,5 +1,5 @@
 # render.yaml — Render Blueprint for MMO Video Clipper
-# Place in repo root. Render auto-detects this file when connecting a repo.
+# Frontend is deployed on Vercel separately.
 # Docs: https://render.com/docs/blueprint-spec
 
 services:
@@ -18,7 +18,7 @@ services:
       - key: PORT
         value: "10000"
       - key: SUPABASE_URL
-        sync: false   # set manually in Render dashboard
+        sync: false           # set in Render dashboard
       - key: SUPABASE_SERVICE_KEY
         sync: false
       - key: JWT_SECRET
@@ -26,23 +26,26 @@ services:
       - key: JWT_EXPIRES_IN
         value: 7d
       - key: FRONTEND_URL
-        sync: false   # e.g. https://mmo-clipper-frontend.onrender.com
+        sync: false           # your Vercel URL, e.g. https://mmo-clipper.vercel.app
       - key: AI_SERVICE_URL
-        sync: false   # set if ai-service is deployed somewhere
+        fromService:
+          name: mmo-clipper-ai
+          type: web
+          envVarKey: RENDER_EXTERNAL_URL
 
-  # ─── Frontend (Next.js SSR) ────────────────────────────────
+  # ─── AI Service (Docker — Whisper + FFmpeg) ────────────────
   - type: web
-    name: mmo-clipper-frontend
-    runtime: node
+    name: mmo-clipper-ai
+    runtime: docker
     region: singapore
     plan: free
-    rootDir: frontend
-    buildCommand: npm install && npm run build
-    startCommand: npm run start
+    rootDir: ai-service
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
     envVars:
-      - key: NEXT_PUBLIC_API_URL
-        sync: false   # e.g. https://mmo-clipper-backend.onrender.com/api
-      - key: NEXT_PUBLIC_SUPABASE_URL
-        sync: false
-      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
-        sync: false
+      - key: PORT
+        value: "5000"
+      - key: WHISPER_MODEL
+        value: base
+      - key: STORAGE_DIR
+        value: ./storage

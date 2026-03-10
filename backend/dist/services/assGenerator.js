@@ -1,49 +1,83 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.frontendStyleToASS = frontendStyleToASS;
 exports.generateASS = generateASS;
 /**
- * Generate ASS (Advanced SubStation Alpha) subtitle format
- * This format allows for styling and is supported by FFmpeg
+ * Convert hex color (#RRGGBB) to ASS color (&HAABBGGRR)
+ * ASS format: &H<alpha><blue><green><red>
+ */
+function hexToASSColor(hex, opacity = 1) {
+    const r = hex.slice(1, 3);
+    const g = hex.slice(3, 5);
+    const b = hex.slice(5, 7);
+    const alpha = Math.round((1 - opacity) * 255).toString(16).padStart(2, '0').toUpperCase();
+    return `&H${alpha}${b.toUpperCase()}${g.toUpperCase()}${r.toUpperCase()}`;
+}
+/**
+ * Convert frontend SubtitleStyle → ASSStyle
+ */
+function frontendStyleToASS(style) {
+    return {
+        name: 'Default',
+        fontName: 'Arial',
+        fontSize: style.fontSize,
+        primaryColor: hexToASSColor(style.textColor, 1),
+        outlineColor: style.textShadow ? '&H00000000' : '&H00000000',
+        backColor: hexToASSColor(style.backgroundColor, style.backgroundOpacity),
+        outline: style.textShadow ? 2 : 0,
+        shadow: style.textShadow ? 1 : 0,
+        bold: style.fontWeight >= 700,
+        spacing: style.letterSpacing,
+        alignment: style.position === 'middle' ? 5 : 2,
+        marginV: style.padding * 2,
+        borderStyle: style.backgroundOpacity > 0.01 ? 3 : 1,
+    };
+}
+/**
+ * Generate ASS subtitle content from segments + style
  */
 function generateASS(segments, style) {
     const defaultStyle = {
         name: 'Default',
         fontName: 'Arial',
         fontSize: 52,
-        primaryColor: '&H00FFFFFF', // White
-        outlineColor: '&H00000000', // Black
+        primaryColor: '&H00FFFFFF',
+        outlineColor: '&H00000000',
+        backColor: '&H80000000',
         outline: 2,
         shadow: 1,
         bold: true,
-        alignment: 2, // Bottom center
+        spacing: 0,
+        alignment: 2,
         marginV: 20,
+        borderStyle: 1,
     };
-    const finalStyle = { ...defaultStyle, ...style };
+    const s = { ...defaultStyle, ...style };
     const header = `[Script Info]
 Title: Generated Subtitles
 ScriptType: v4.00+
 WrapStyle: 0
-PlayResX: 1920
-PlayResY: 1080
+PlayResX: 1080
+PlayResY: 1920
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: ${finalStyle.name},${finalStyle.fontName},${finalStyle.fontSize},${finalStyle.primaryColor},&H000000FF,${finalStyle.outlineColor},&H00000000,${finalStyle.bold ? -1 : 0},0,0,0,100,100,0,0,1,${finalStyle.outline},${finalStyle.shadow},${finalStyle.alignment},10,10,${finalStyle.marginV},1
+Style: ${s.name},${s.fontName},${s.fontSize},${s.primaryColor},&H000000FF,${s.outlineColor},${s.backColor},${s.bold ? -1 : 0},0,0,0,100,100,${s.spacing ?? 0},0,${s.borderStyle ?? 1},${s.outline},${s.shadow},${s.alignment},10,10,${s.marginV},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
-    const events = segments.map((seg, idx) => {
+    const events = segments.map((seg) => {
         const start = formatASSTime(seg.start);
         const end = formatASSTime(seg.end);
         const text = escapeASSText(seg.text);
-        return `Dialogue: 0,${start},${end},${finalStyle.name},,0,0,0,,${text}`;
+        return `Dialogue: 0,${start},${end},${s.name},,0,0,0,,${text}`;
     }).join('\n');
     return header + events;
 }
 /**
- * Format seconds to ASS time format (H:MM:SS.CC)
+ * Format seconds to ASS time (H:MM:SS.CC)
  */
 function formatASSTime(seconds) {
     const hours = Math.floor(seconds / 3600);

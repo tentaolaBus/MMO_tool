@@ -31,6 +31,12 @@ class JobQueue {
         }
     }
     /**
+     * Remove a job from the queue
+     */
+    removeJob(jobId) {
+        return this.jobs.delete(jobId);
+    }
+    /**
      * Get all pending jobs
      */
     getPendingJobs() {

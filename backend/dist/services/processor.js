@@ -8,8 +8,9 @@ const axios_1 = __importDefault(require("axios"));
 const queue_1 = require("./queue");
 const config_1 = require("../config");
 /**
- * Job processor - handles background processing of video jobs
- * Runs in a loop checking for pending jobs
+ * Job processor — handles background processing of video jobs.
+ * Polls the queue every 5 seconds for pending jobs.
+ * Processes one job at a time (sequential).
  */
 class JobProcessor {
     constructor() {
@@ -21,7 +22,6 @@ class JobProcessor {
      */
     start() {
         console.log('Job processor started');
-        // Check for new jobs every 5 seconds
         this.processingInterval = setInterval(() => {
             this.processNextJob();
         }, 5000);
@@ -37,48 +37,58 @@ class JobProcessor {
         console.log('Job processor stopped');
     }
     /**
-     * Process the next pending job
+     * Process the next pending job.
+     * Includes retry logic: if the AI service returns 503 (busy),
+     * the job stays in the queue and will be retried next poll.
      */
     async processNextJob() {
-        // Don't start a new job if already processing one
-        if (this.isProcessing) {
+        if (this.isProcessing)
             return;
-        }
         const pendingJobs = queue_1.jobQueue.getPendingJobs();
-        if (pendingJobs.length === 0) {
+        if (pendingJobs.length === 0)
             return;
-        }
         const job = pendingJobs[0];
         this.isProcessing = true;
         try {
-            console.log(`Processing job ${job.id}`);
-            // Update job status to processing
+            console.log(`\n🔄 ====== PROCESSING JOB ${job.id} ======`);
+            // STAGE: Transcription
+            console.log(`   [STAGE] transcribing — calling AI service...`);
             queue_1.jobQueue.updateJob(job.id, { status: 'processing', progress: 10 });
-            // Call AI service to transcribe
             const response = await axios_1.default.post(`${config_1.config.aiServiceUrl}/transcribe`, {
                 jobId: job.id,
                 videoPath: job.videoPath,
+            }, {
+                timeout: config_1.config.aiRequestTimeoutMs, // 5 minute timeout
+                // No maxContentLength/maxBodyLength needed — response is small JSON
             });
+            console.log(`   [STAGE] AI response — success=${response.data.success}`);
             if (response.data.success) {
-                // Update job with results
                 queue_1.jobQueue.updateJob(job.id, {
                     status: 'completed',
                     progress: 100,
                     audioPath: response.data.audioPath,
                     transcriptPath: response.data.transcriptPath,
                 });
-                console.log(`Job ${job.id} completed successfully`);
+                console.log(`   ✅ Job ${job.id} DONE\n`);
             }
             else {
-                throw new Error('AI service returned unsuccessful response');
+                throw new Error(response.data.error || 'AI service returned unsuccessful response');
             }
         }
         catch (error) {
-            console.error(`Job ${job.id} failed:`, error.message);
-            queue_1.jobQueue.updateJob(job.id, {
-                status: 'failed',
-                error: error.message || 'Unknown error occurred',
-            });
+            // If AI service is busy (503), leave job in queue for retry
+            if (error.response?.status === 503 && error.response?.data?.retry) {
+                console.log(`   ⏳ AI service busy — will retry job ${job.id} next cycle`);
+                queue_1.jobQueue.updateJob(job.id, { status: 'pending' });
+            }
+            else {
+                const errDetail = error.response?.data?.error || error.message || 'Unknown error';
+                console.error(`   ❌ Job ${job.id} FAILED — ${errDetail}\n`);
+                queue_1.jobQueue.updateJob(job.id, {
+                    status: 'failed',
+                    error: errDetail,
+                });
+            }
         }
         finally {
             this.isProcessing = false;

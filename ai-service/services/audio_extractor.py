@@ -1,52 +1,64 @@
 import os
-import ffmpeg
+import subprocess
+import time
+
 
 class AudioExtractor:
     """
-    Extracts audio from video files using FFmpeg
+    Extracts audio from video files using FFmpeg (via subprocess).
+    Uses subprocess instead of ffmpeg-python for better timeout control.
     """
-    
+
+    # 10 minute timeout for audio extraction (handles long videos)
+    EXTRACTION_TIMEOUT = 600
+
     def extract_audio(self, video_path: str, audio_path: str) -> bool:
         """
-        Extract audio from video file and save as MP3
-        
-        Args:
-            video_path: Path to input video file
-            audio_path: Path to output audio file
-            
-        Returns:
-            True if successful, False otherwise
+        Extract audio from video file and save as MP3.
+
+        Uses FFmpeg with settings optimised for Whisper:
+        - 16kHz sample rate (Whisper's native rate)
+        - mono channel
+        - 128kbps bitrate
+
+        Returns True if successful, False otherwise.
         """
         try:
             # Ensure output directory exists
             os.makedirs(os.path.dirname(audio_path), exist_ok=True)
-            
-            # Extract audio using FFmpeg
-            # -vn: no video
-            # -acodec libmp3lame: use MP3 codec
-            # -ar 16000: sample rate 16kHz (optimal for Whisper)
-            # -ac 1: mono audio
-            # -ab 128k: bitrate 128kbps
-            (
-                ffmpeg
-                .input(video_path)
-                .output(
-                    audio_path,
-                    acodec='libmp3lame',
-                    ar='16000',
-                    ac=1,
-                    ab='128k',
-                    **{'vn': None}
-                )
-                .overwrite_output()
-                .run(capture_stdout=True, capture_stderr=True)
+
+            start = time.time()
+
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', video_path,
+                '-vn',                  # no video
+                '-acodec', 'libmp3lame',
+                '-ar', '16000',         # 16kHz for Whisper
+                '-ac', '1',             # mono
+                '-ab', '128k',
+                audio_path,
+            ]
+
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.EXTRACTION_TIMEOUT,
             )
-            
-            print(f"Audio extracted successfully: {audio_path}")
+
+            elapsed = time.time() - start
+
+            if result.returncode != 0:
+                print(f"FFmpeg error (exit {result.returncode}): {result.stderr[-500:]}")
+                return False
+
+            size_kb = os.path.getsize(audio_path) / 1024
+            print(f"Audio extracted: {audio_path} ({size_kb:.0f} KB, {elapsed:.1f}s)")
             return True
-            
-        except ffmpeg.Error as e:
-            print(f"FFmpeg error: {e.stderr.decode()}")
+
+        except subprocess.TimeoutExpired:
+            print(f"FFmpeg timed out after {self.EXTRACTION_TIMEOUT}s for: {video_path}")
             return False
         except Exception as e:
             print(f"Error extracting audio: {str(e)}")

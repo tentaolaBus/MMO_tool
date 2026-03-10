@@ -6,6 +6,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const path_1 = __importDefault(require("path"));
+const dotenv_1 = __importDefault(require("dotenv"));
+// Load environment variables FIRST
+dotenv_1.default.config();
 const config_1 = require("./config");
 const upload_1 = __importDefault(require("./routes/upload"));
 const jobs_1 = __importDefault(require("./routes/jobs"));
@@ -15,18 +18,33 @@ const auth_1 = __importDefault(require("./routes/auth"));
 const processor_1 = require("./services/processor");
 const database_1 = require("./services/database");
 const errorHandler_1 = require("./middleware/errorHandler");
-// Import database service - initialization happens automatically on import
+// Import database service - Supabase connection is established on import
 require("./services/database");
-// Initialize SQL Server database and users table
-const sqlServer_1 = require("./config/sqlServer");
-(0, sqlServer_1.initSqlServerDatabase)().catch(err => console.error('SQL Server init failed:', err));
 const app = (0, express_1.default)();
-// Middleware
-app.use((0, cors_1.default)());
-app.use(express_1.default.json());
+// CORS configuration — restrict origins in production
+const allowedOrigins = [
+    process.env.FRONTEND_URL,
+    'http://localhost:3000',
+].filter(Boolean);
+app.use((0, cors_1.default)({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, curl, server-to-server)
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        }
+        else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+}));
+app.use(express_1.default.json({ limit: '50mb' }));
+app.use(express_1.default.urlencoded({ limit: '50mb', extended: true }));
 // Serve storage files (videos, clips, transcripts)
+// For /storage/final/ — disable browser caching so re-rendered videos always load fresh
+app.use('/storage/final', express_1.default.static(path_1.default.join(__dirname, '../storage/final'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, must-revalidate') }));
+// For everything else under /storage/
 app.use('/storage', express_1.default.static(path_1.default.join(__dirname, '../storage')));
-app.use('/storage/final', express_1.default.static(path_1.default.join(__dirname, '../storage/final')));
 // API routes
 app.use('/api/auth', auth_1.default);
 app.use('/api/upload', upload_1.default);
@@ -35,7 +53,7 @@ app.use('/api/clips', clips_1.default);
 app.use('/api/clips', subtitles_1.default);
 // Health check
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', codeVersion: 'FIX_2026_02_20_V3', timestamp: new Date().toISOString() });
 });
 // 404 handler (must be after all routes)
 app.use(errorHandler_1.notFoundHandler);
@@ -59,7 +77,7 @@ process.on('uncaughtException', (error) => {
     process.exit(1);
 });
 // Start server
-const server = app.listen(config_1.config.port, () => {
+const server = app.listen(config_1.config.port, "0.0.0.0", () => {
     console.log('\n🚀 ===================================');
     console.log('   MMO Video Tool - Backend Server');
     console.log('   ===================================');

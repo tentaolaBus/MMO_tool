@@ -12,11 +12,21 @@ const storage_1 = require("../services/storage");
 const queue_1 = require("../services/queue");
 const youtubeDownloader_1 = require("../services/youtubeDownloader");
 const router = (0, express_1.Router)();
-// Configure multer for file upload
+// Configure multer with diskStorage for stable large-file uploads
+// diskStorage writes directly to disk — never buffers 500MB in memory
+const storage = multer_1.default.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, path_1.default.resolve(config_1.config.uploadDir));
+    },
+    filename: (req, file, cb) => {
+        const ext = path_1.default.extname(file.originalname) || '.mp4';
+        cb(null, `${(0, uuid_1.v4)()}${ext}`);
+    },
+});
 const upload = (0, multer_1.default)({
-    dest: config_1.config.uploadDir,
+    storage,
     limits: {
-        fileSize: config_1.config.maxFileSize,
+        fileSize: config_1.config.maxFileSize, // 500MB
     },
     fileFilter: (req, file, cb) => {
         if (config_1.config.allowedVideoTypes.includes(file.mimetype)) {
@@ -28,12 +38,43 @@ const upload = (0, multer_1.default)({
     },
 });
 /**
+ * Multer error handler middleware
+ * Returns clean JSON errors instead of crashing on file-too-large etc.
+ */
+function handleMulterError(err, req, res, next) {
+    if (err instanceof multer_1.default.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(413).json({
+                success: false,
+                message: `File too large. Maximum size is ${config_1.config.maxFileSize / (1024 * 1024)}MB`,
+            });
+        }
+        return res.status(400).json({
+            success: false,
+            message: `Upload error: ${err.message}`,
+        });
+    }
+    if (err) {
+        return res.status(400).json({
+            success: false,
+            message: err.message || 'Upload failed',
+        });
+    }
+    next();
+}
+/**
  * POST /api/upload
  * Upload a video file and create a new job
  */
-router.post('/', upload.single('video'), async (req, res) => {
+router.post('/', upload.single('video'), handleMulterError, async (req, res) => {
+    console.log('\n📥 === FILE UPLOAD REQUEST ===');
+    console.log('   Time:', new Date().toISOString());
+    console.log('   File:', req.file?.originalname || 'No file');
+    console.log('   Size:', req.file?.size ? `${(req.file.size / 1024 / 1024).toFixed(2)} MB` : 'N/A');
+    console.log('   Type:', req.file?.mimetype || 'N/A');
     try {
         if (!req.file) {
+            console.log('   ❌ Error: No video file provided');
             return res.status(400).json({
                 success: false,
                 message: 'No video file provided',
@@ -77,9 +118,13 @@ router.post('/', upload.single('video'), async (req, res) => {
  * Download a video from YouTube and create a new job
  */
 router.post('/youtube', async (req, res) => {
+    console.log('\n📺 === YOUTUBE UPLOAD REQUEST ===');
+    console.log('   Time:', new Date().toISOString());
+    console.log('   URL:', req.body?.url || 'No URL');
     try {
         const { url } = req.body;
         if (!url) {
+            console.log('   ❌ Error: YouTube URL is required');
             return res.status(400).json({
                 success: false,
                 message: 'YouTube URL is required',
@@ -135,10 +180,38 @@ router.post('/youtube', async (req, res) => {
         });
     }
     catch (error) {
-        console.error('YouTube upload error:', error);
+        const errMsg = error.message || 'Failed to download YouTube video';
+        console.error('❌ YouTube upload error:', errMsg);
+        // Categorize the error for the frontend
+        let category = 'download_failed';
+        let hint = 'Please try again or use a different video.';
+        if (errMsg.includes('Invalid YouTube URL')) {
+            category = 'invalid_url';
+            hint = 'The URL does not appear to be a valid YouTube link.';
+        }
+        else if (errMsg.includes('Private video') || errMsg.includes('Video unavailable')) {
+            category = 'video_unavailable';
+            hint = 'This video is private or unavailable. Try a public video.';
+        }
+        else if (errMsg.includes('Sign in') || errMsg.includes('bot') || errMsg.includes('confirm')) {
+            category = 'bot_detected';
+            hint = 'YouTube bot detection triggered. Try updating yt-dlp: pip install -U yt-dlp';
+        }
+        else if (errMsg.includes('format') || errMsg.includes('Requested format')) {
+            category = 'format_error';
+            hint = 'Video format issue. Please try a different video.';
+        }
+        else if (errMsg.includes('not found') || errMsg.includes('empty')) {
+            category = 'file_error';
+            hint = 'Download completed but output file was not created. Check disk space.';
+        }
         res.status(500).json({
             success: false,
-            message: error.message || 'Failed to download YouTube video',
+            message: hint,
+            error: {
+                category,
+                detail: errMsg.slice(0, 500),
+            },
         });
     }
 });

@@ -1,62 +1,64 @@
 from flask import Flask, request, jsonify
-import os, sys, json, time
+import os
+import threading
+import time
 from config import config
 from services.audio_extractor import AudioExtractor
 from services.transcriber import Transcriber
 
-# On Windows, Flask's debug reloader breaks sys.stderr's pipe handle.
-# tqdm (used by Whisper) calls sys.stderr.flush() which raises
-# OSError: [Errno 22] Invalid argument. This wrapper absorbs that.
-if sys.platform == 'win32':
-    _original_stderr = sys.stderr
-    class _SafeStderr:
-        def write(self, s):
-            try:
-                return _original_stderr.write(s)
-            except OSError:
-                return len(s) if isinstance(s, str) else 0
-        def flush(self):
-            try:
-                _original_stderr.flush()
-            except OSError:
-                pass
-        def __getattr__(self, name):
-            return getattr(_original_stderr, name)
-    sys.stderr = _SafeStderr()
-
-# #region agent log
-def _dbglog(loc, msg, data=None, hyp=''):
-    try:
-        with open(os.path.join(os.path.dirname(__file__), '..', 'debug-0170bb.log'), 'a') as f:
-            f.write(json.dumps({'sessionId':'0170bb','location':loc,'message':msg,'data':data or {},'timestamp':int(time.time()*1000),'hypothesisId':hyp}) + '\n')
-    except: pass
-# #endregion
-
 app = Flask(__name__)
 
-# Initialize services
+# Initialize services — Whisper model is loaded ONCE here
 audio_extractor = AudioExtractor()
 transcriber = Transcriber(model_name=config.WHISPER_MODEL)
+
+# ── Concurrency guard ────────────────────────────────────────
+# Whisper is NOT thread-safe — only one transcription at a time.
+_processing_lock = threading.Lock()
+_current_job_id: str | None = None
+_jobs_completed = 0
+_jobs_failed = 0
+
 
 @app.route('/health', methods=['GET'])
 def health():
     """Health check endpoint"""
     return jsonify({
         'status': 'ok',
-        'whisper_model': config.WHISPER_MODEL
+        'whisper_model': config.WHISPER_MODEL,
+        'busy': _processing_lock.locked(),
+        'current_job': _current_job_id,
+        'stats': {
+            'completed': _jobs_completed,
+            'failed': _jobs_failed,
+        }
     })
+
+
+@app.route('/status', methods=['GET'])
+def status():
+    """Detailed status endpoint for monitoring"""
+    return jsonify({
+        'service': 'mmo-ai-service',
+        'model': config.WHISPER_MODEL,
+        'busy': _processing_lock.locked(),
+        'current_job': _current_job_id,
+        'completed': _jobs_completed,
+        'failed': _jobs_failed,
+    })
+
 
 @app.route('/transcribe', methods=['POST'])
 def transcribe():
     """
-    Transcribe video endpoint
-    
+    Transcribe video endpoint.
+
     Request JSON:
     {
         "jobId": "uuid",
         "videoPath": "/path/to/video.mp4"
     }
-    
+
     Response JSON:
     {
         "success": true,
@@ -64,65 +66,65 @@ def transcribe():
         "transcriptPath": "/path/to/transcript.json"
     }
     """
+    global _current_job_id, _jobs_completed, _jobs_failed
+
+    data = request.get_json()
+
+    if not data or 'jobId' not in data or 'videoPath' not in data:
+        return jsonify({
+            'success': False,
+            'error': 'Missing required fields: jobId, videoPath'
+        }), 400
+
+    job_id = data['jobId']
+    video_path = data['videoPath']
+
+    # Validate video file exists
+    if not os.path.exists(video_path):
+        return jsonify({
+            'success': False,
+            'error': f'Video file not found: {video_path}'
+        }), 404
+
+    # Try to acquire the lock — don't block if another job is running
+    acquired = _processing_lock.acquire(blocking=False)
+    if not acquired:
+        return jsonify({
+            'success': False,
+            'error': f'AI service is busy processing job: {_current_job_id}. Try again later.',
+            'retry': True,
+        }), 503
+
     try:
-        data = request.get_json()
-        
-        if not data or 'jobId' not in data or 'videoPath' not in data:
-            return jsonify({
-                'success': False,
-                'error': 'Missing required fields: jobId, videoPath'
-            }), 400
-        
-        job_id = data['jobId']
-        video_path = data['videoPath']
-        
-        # #region agent log
-        _dbglog('app.py:transcribe', 'Transcribe request received', {'jobId': job_id, 'videoPath': video_path, 'exists': os.path.exists(video_path)}, 'H4')
-        # #endregion
-        
-        # Validate video file exists
-        if not os.path.exists(video_path):
-            # #region agent log
-            _dbglog('app.py:transcribe', 'Video NOT found', {'videoPath': video_path}, 'H4')
-            # #endregion
-            return jsonify({
-                'success': False,
-                'error': f'Video file not found: {video_path}'
-            }), 404
-        
-        # Derive storage dir from the video path so audio/transcript land in
-        # the same storage tree the backend uses, regardless of AI service CWD.
-        # video_path = .../storage/videos/{id}.mp4  →  storage_base = .../storage
+        _current_job_id = job_id
+
+        # Derive storage paths
         storage_base = os.path.dirname(os.path.dirname(os.path.abspath(video_path)))
         audio_path = os.path.join(storage_base, 'audio', f'{job_id}.mp3')
         transcript_path = os.path.join(storage_base, 'transcripts', f'{job_id}.json')
-        
-        print(f"Processing job {job_id}")
-        print(f"Video: {video_path}")
-        print(f"Audio: {audio_path}")
-        print(f"Transcript: {transcript_path}")
-        
+
+        print(f"\n🔄 Processing job {job_id}")
+        print(f"   Video: {video_path}")
+        start_time = time.time()
+
         # Step 1: Extract audio
-        print("Step 1: Extracting audio...")
+        print("   [1/2] Extracting audio...")
         audio_ok = audio_extractor.extract_audio(video_path, audio_path)
-        # #region agent log
-        _dbglog('app.py:transcribe', 'Audio extraction result', {'success': audio_ok, 'audioPath': audio_path, 'audioExists': os.path.exists(audio_path) if audio_ok else False}, 'H3')
-        # #endregion
         if not audio_ok:
+            _jobs_failed += 1
             return jsonify({
                 'success': False,
                 'error': 'Failed to extract audio from video'
             }), 500
-        
+
         # Step 2: Transcribe audio
-        print("Step 2: Transcribing audio...")
-        # #region agent log
-        _dbglog('app.py:transcribe', 'Starting Whisper transcription', {'audioPath': audio_path}, 'H2')
-        # #endregion
+        print("   [2/2] Transcribing...")
         transcript_data = transcriber.transcribe(audio_path, transcript_path, job_id)
-        
-        print(f"Job {job_id} completed successfully")
-        
+
+        elapsed = time.time() - start_time
+        _jobs_completed += 1
+        print(f"   ✅ Job {job_id} completed in {elapsed:.1f}s\n")
+
         return jsonify({
             'success': True,
             'audioPath': audio_path,
@@ -131,20 +133,22 @@ def transcribe():
             'duration': transcript_data['duration'],
             'segmentCount': len(transcript_data['segments'])
         })
-        
+
     except Exception as e:
-        # #region agent log
-        import traceback
-        _dbglog('app.py:transcribe', 'EXCEPTION in transcription', {'error': str(e), 'traceback': traceback.format_exc()}, 'H2,H3')
-        # #endregion
-        print(f"Error processing transcription: {str(e)}")
+        _jobs_failed += 1
+        print(f"   ❌ Job {job_id} failed: {str(e)}\n")
         return jsonify({
             'success': False,
             'error': str(e)
         }), 500
 
+    finally:
+        _current_job_id = None
+        _processing_lock.release()
+
+
 if __name__ == '__main__':
     print(f"Starting AI Service on port {config.PORT}")
     print(f"Whisper model: {config.WHISPER_MODEL}")
     print(f"Storage directory: {config.STORAGE_DIR}")
-    app.run(host='0.0.0.0', port=config.PORT, debug=True)
+    app.run(host='0.0.0.0', port=config.PORT, debug=False)

@@ -1,4 +1,4 @@
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
@@ -10,11 +10,22 @@ import { youtubeDownloader } from '../services/youtubeDownloader';
 
 const router = Router();
 
-// Configure multer for file upload
+// Configure multer with diskStorage for stable large-file uploads
+// diskStorage writes directly to disk — never buffers 500MB in memory
+const storage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        cb(null, path.resolve(config.uploadDir));
+    },
+    filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname) || '.mp4';
+        cb(null, `${uuidv4()}${ext}`);
+    },
+});
+
 const upload = multer({
-    dest: config.uploadDir,
+    storage,
     limits: {
-        fileSize: config.maxFileSize,
+        fileSize: config.maxFileSize, // 500MB
     },
     fileFilter: (req, file, cb) => {
         if (config.allowedVideoTypes.includes(file.mimetype)) {
@@ -26,10 +37,36 @@ const upload = multer({
 });
 
 /**
+ * Multer error handler middleware
+ * Returns clean JSON errors instead of crashing on file-too-large etc.
+ */
+function handleMulterError(err: any, req: Request, res: Response, next: NextFunction) {
+    if (err instanceof multer.MulterError) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(413).json({
+                success: false,
+                message: `File too large. Maximum size is ${config.maxFileSize / (1024 * 1024)}MB`,
+            });
+        }
+        return res.status(400).json({
+            success: false,
+            message: `Upload error: ${err.message}`,
+        });
+    }
+    if (err) {
+        return res.status(400).json({
+            success: false,
+            message: err.message || 'Upload failed',
+        });
+    }
+    next();
+}
+
+/**
  * POST /api/upload
  * Upload a video file and create a new job
  */
-router.post('/', upload.single('video'), async (req: Request, res: Response) => {
+router.post('/', upload.single('video'), handleMulterError, async (req: Request, res: Response) => {
     console.log('\n📥 === FILE UPLOAD REQUEST ===');
     console.log('   Time:', new Date().toISOString());
     console.log('   File:', req.file?.originalname || 'No file');
@@ -198,4 +235,3 @@ router.post('/youtube', async (req: Request, res: Response) => {
 });
 
 export default router;
-

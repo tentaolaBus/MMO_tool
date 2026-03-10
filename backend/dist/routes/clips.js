@@ -11,8 +11,45 @@ const videoCutter_1 = require("../services/videoCutter");
 const queue_1 = require("../services/queue");
 const database_1 = require("../services/database");
 const uuid_1 = require("uuid");
-const cloudinaryService_1 = require("../services/cloudinaryService");
+// #region agent log
+const _dbglog = (loc, msg, data = {}, hyp = '') => {
+    try {
+        fs_1.default.appendFileSync(path_1.default.resolve(__dirname, '../../..', 'debug-0170bb.log'), JSON.stringify({ sessionId: '0170bb', location: loc, message: msg, data, timestamp: Date.now(), hypothesisId: hyp }) + '\n');
+    }
+    catch { }
+};
+// #endregion
 const router = (0, express_1.Router)();
+/**
+ * Safely parse the keywords field from Supabase.
+ * It may be: a JSON string, an already-parsed array, null, or invalid.
+ */
+function safeParseKeywords(keywords) {
+    if (!keywords)
+        return [];
+    if (Array.isArray(keywords))
+        return keywords;
+    try {
+        const parsed = JSON.parse(keywords);
+        return Array.isArray(parsed) ? parsed : [];
+    }
+    catch {
+        return [];
+    }
+}
+/**
+ * Build a videoUrl from a clip row.
+ * Always resolves to a local storage path.
+ */
+function buildVideoUrl(clip) {
+    const vp = clip.video_path || '';
+    // Local storage path
+    if (vp.includes('storage')) {
+        const after = vp.split(/[\\/]storage[\\/]/)[1];
+        return after ? `/storage/${after.replace(/\\/g, '/')}` : `/storage/clips/${path_1.default.basename(vp)}`;
+    }
+    return `/storage/clips/${path_1.default.basename(vp)}`;
+}
 /**
  * POST /api/clips/analyze
  * Analyze a transcript and generate clip candidates
@@ -64,34 +101,48 @@ router.post('/analyze', async (req, res) => {
 /**
  * POST /api/clips/render
  * Render clips for a job and save to database
+ *
+ * DIAGNOSTIC VERSION — numbered STAGE logs + structured error output
  */
 router.post('/render', async (req, res) => {
     const startTime = Date.now();
-    console.log('\n🎬 === POST /clips/render ===');
+    let currentStage = 'INIT';
+    console.log('\n🎬 ========================================');
+    console.log('   POST /clips/render — DIAGNOSTIC MODE');
+    console.log('========================================');
     try {
         const { jobId, maxClips = 10, clipIndices } = req.body;
-        // ===== VALIDATION =====
-        console.log(`📋 Request: jobId=${jobId}, maxClips=${maxClips}`);
+        // ===== STAGE 0: VALIDATION =====
+        currentStage = 'STAGE_0_VALIDATION';
+        console.log('\n📋 STAGE 0: Validating request params...');
+        console.log(`   jobId=${jobId} (type: ${typeof jobId})`);
+        console.log(`   maxClips=${maxClips} (type: ${typeof maxClips})`);
+        console.log(`   clipIndices=${JSON.stringify(clipIndices)}`);
         if (!jobId || typeof jobId !== 'string') {
-            console.error('❌ Validation error: Missing or invalid jobId');
+            console.error('   ❌ FAIL: Missing or invalid jobId');
             return res.status(400).json({
                 success: false,
+                stage: currentStage,
                 message: 'Missing or invalid jobId parameter'
             });
         }
         if (typeof maxClips !== 'number' || maxClips < 1 || maxClips > 50) {
-            console.error(`❌ Validation error: Invalid maxClips value: ${maxClips}`);
+            console.error(`   ❌ FAIL: Invalid maxClips value: ${maxClips}`);
             return res.status(400).json({
                 success: false,
+                stage: currentStage,
                 message: 'maxClips must be a number between 1 and 50'
             });
         }
-        // ===== CHECK DATABASE FIRST =====
-        console.log('🔍 Checking if clips already exist in database...');
+        console.log('   ✅ STAGE 0 PASSED');
+        // ===== STAGE 1: CHECK EXISTING CLIPS IN DATABASE =====
+        currentStage = 'STAGE_1_CHECK_EXISTING_CLIPS';
+        console.log('\n🔍 STAGE 1: Checking if clips already exist in database...');
         try {
-            const existingClips = database_1.queries.getClipsByJob.all(jobId);
+            const existingClips = await database_1.queries.getClipsByJob(jobId);
+            console.log(`   Supabase returned: ${existingClips?.length ?? 'null'} clips`);
             if (existingClips && existingClips.length > 0) {
-                console.log(`✅ Found ${existingClips.length} existing clips in database`);
+                console.log(`   ✅ STAGE 1: Found ${existingClips.length} existing clips — returning cached`);
                 return res.json({
                     success: true,
                     jobId,
@@ -100,8 +151,8 @@ router.post('/render', async (req, res) => {
                         jobId: c.job_id,
                         clipIndex: c.clip_index,
                         videoPath: c.video_path,
-                        videoUrl: `/storage/clips/${path_1.default.basename(c.video_path)}`,
-                        filename: path_1.default.basename(c.video_path),
+                        videoUrl: buildVideoUrl(c),
+                        filename: path_1.default.basename(c.video_path || ''),
                         startTime: c.start_time,
                         endTime: c.end_time,
                         duration: c.duration,
@@ -111,186 +162,241 @@ router.post('/render', async (req, res) => {
                             durationScore: c.score_duration,
                             keywordScore: c.score_keyword,
                             completenessScore: c.score_completeness,
-                            keywords: c.keywords ? JSON.parse(c.keywords) : []
+                            keywords: safeParseKeywords(c.keywords)
                         },
-                        selected: c.selected === 1,
-                        createdAt: c.created_at
+                        selected: !!c.selected,
+                        createdAt: c.created_at,
+                        updatedAt: c.updated_at || c.created_at
                     })),
                     count: existingClips.length,
                     message: 'Clips loaded from database (already rendered)'
                 });
             }
+            console.log('   ✅ STAGE 1 PASSED (no existing clips)');
         }
         catch (dbError) {
-            console.error('❌ Database query error:', dbError.message);
+            console.error('   ❌ STAGE 1 FAILED — Supabase getClipsByJob error');
+            console.error('   Error:', dbError.message);
+            console.error('   Full error:', JSON.stringify(dbError, null, 2));
             return res.status(500).json({
                 success: false,
+                stage: currentStage,
                 message: 'Database error while checking for existing clips',
-                error: dbError.message
+                error: dbError.message,
+                hint: 'Check if "clips" table exists in Supabase and SUPABASE_SERVICE_KEY is correct'
             });
         }
-        console.log('📝 No existing clips found, starting render...');
-        // ===== GET JOB =====
+        // ===== STAGE 2: FETCH JOB FROM IN-MEMORY QUEUE =====
+        currentStage = 'STAGE_2_FETCH_JOB';
+        console.log('\n📦 STAGE 2: Fetching job from in-memory queue...');
         const job = queue_1.jobQueue.getJob(jobId);
         if (!job) {
-            console.error(`❌ Job not found: ${jobId}`);
+            console.error(`   ❌ STAGE 2 FAILED — Job "${jobId}" not in memory`);
+            console.error('   Available jobs:', JSON.stringify(queue_1.jobQueue.getAllJobs().map(j => ({ id: j.id, status: j.status }))));
             return res.status(404).json({
                 success: false,
-                message: `Job not found: ${jobId}`
+                stage: currentStage,
+                message: `Job not found in memory: ${jobId}`,
+                hint: 'The in-memory job queue loses data on server restart. Re-upload the video.'
             });
         }
-        console.log(`✅ Job found: ${job.id}, status: ${job.status}`);
-        // ===== ENSURE JOB EXISTS IN DATABASE =====
-        console.log('💾 Ensuring job exists in database...');
+        console.log('   JOB DETAILS:');
+        console.log(`     id:             ${job.id}`);
+        console.log(`     status:         ${job.status}`);
+        console.log(`     progress:       ${job.progress}`);
+        console.log(`     videoPath:      ${job.videoPath ?? 'NULL ⚠️'}`);
+        console.log(`     audioPath:      ${job.audioPath ?? 'NULL'}`);
+        console.log(`     transcriptPath: ${job.transcriptPath ?? 'NULL ⚠️'}`);
+        console.log('   ✅ STAGE 2 PASSED');
+        // ===== STAGE 2.5: CHECK JOB STATUS =====
+        currentStage = 'STAGE_2_5_CHECK_STATUS';
+        console.log(`\n⏳ STAGE 2.5: Checking job processing status...`);
+        console.log(`   Current status: ${job.status}`);
+        if (job.status === 'pending' || job.status === 'processing') {
+            console.log(`   ⏳ Job still ${job.status} — returning 202 (retry later)`);
+            return res.status(202).json({
+                success: false,
+                status: job.status,
+                progress: job.progress || 0,
+                message: `Transcription still in progress (${job.status}).`,
+                retryAfterMs: 5000
+            });
+        }
+        if (job.status === 'failed') {
+            console.log(`   ❌ Job failed: ${job.error}`);
+            return res.status(422).json({
+                success: false,
+                status: 'failed',
+                message: job.error || 'Transcription failed',
+                hint: 'Re-upload the video to try again'
+            });
+        }
+        console.log('   ✅ STAGE 2.5 PASSED (status: completed)');
+        // ===== STAGE 3: ENSURE JOB IN DATABASE =====
+        currentStage = 'STAGE_3_ENSURE_JOB_IN_DB';
+        console.log(`\n💾 STAGE 3: Ensuring job exists in Supabase (jobId: ${jobId})...`);
         try {
-            // Check if job exists in database
-            const existingJob = database_1.queries.getJob.get(jobId);
+            const existingJob = await database_1.queries.getJob(jobId);
+            console.log(`   Supabase getJob result: ${existingJob ? 'EXISTS' : 'NOT FOUND'} (jobId: ${jobId})`);
             if (!existingJob) {
-                // Insert job into database
-                console.log('  📝 Job not in database, inserting...');
-                database_1.queries.insertJob.run(job.id, job.status, job.progress || 0, job.videoPath || '', job.audioPath || null, job.transcriptPath || null);
-                console.log('  ✅ Job inserted into database');
+                console.log(`   Upserting job into Supabase (jobId: ${jobId})...`);
+                await database_1.queries.insertJob(job.id, job.status, job.progress || 0, job.videoPath || '', job.audioPath || null, job.transcriptPath || null);
+                console.log(`   ✅ Job upserted into Supabase (jobId: ${jobId})`);
             }
-            else {
-                console.log('  ✅ Job already exists in database');
-            }
+            console.log('   ✅ STAGE 3 PASSED');
         }
         catch (dbJobError) {
-            console.error('❌ Database error while inserting job:', dbJobError.message);
+            console.error('   ❌ STAGE 3 FAILED — Supabase job insert/check error');
+            console.error('   Error:', dbJobError.message);
             return res.status(500).json({
                 success: false,
+                stage: currentStage,
                 message: 'Database error while preparing job record',
-                error: dbJobError.message
+                error: dbJobError.message,
+                hint: 'Check if "jobs" table exists in Supabase with correct columns'
             });
         }
-        // ===== CHECK PREREQUISITES =====
-        if (!job.videoPath || !fs_1.default.existsSync(job.videoPath)) {
-            console.error(`❌ Video file not found: ${job.videoPath}`);
+        // ===== STAGE 4: VERIFY FILE SYSTEM =====
+        currentStage = 'STAGE_4_VERIFY_FILES';
+        console.log('\n📂 STAGE 4: Verifying file system...');
+        // Check video file
+        const videoExists = job.videoPath ? fs_1.default.existsSync(job.videoPath) : false;
+        console.log(`   Video path:  ${job.videoPath ?? 'NULL'}`);
+        console.log(`   Video exists: ${videoExists}`);
+        if (!job.videoPath || !videoExists) {
+            console.error('   ❌ STAGE 4 FAILED — Video file not found');
             return res.status(400).json({
                 success: false,
-                message: 'Video file not found'
+                stage: currentStage,
+                message: `Video file not found: ${job.videoPath}`,
+                hint: 'The video file may have been deleted or the path is wrong'
             });
         }
-        if (!job.transcriptPath || !fs_1.default.existsSync(job.transcriptPath)) {
-            console.error(`❌ Transcript file not found: ${job.transcriptPath}`);
+        // Check transcript file
+        const transcriptExists = job.transcriptPath ? fs_1.default.existsSync(job.transcriptPath) : false;
+        console.log(`   Transcript path:  ${job.transcriptPath ?? 'NULL'}`);
+        console.log(`   Transcript exists: ${transcriptExists}`);
+        if (!job.transcriptPath || !transcriptExists) {
+            console.error('   ❌ STAGE 4 FAILED — Transcript file not found');
             return res.status(400).json({
                 success: false,
-                message: 'Transcript not available. Please wait for transcription to complete.'
+                stage: currentStage,
+                message: `Transcript not available: ${job.transcriptPath}`,
+                hint: 'Wait for transcription to complete before rendering clips'
             });
         }
-        // ===== LOAD TRANSCRIPT =====
-        console.log('📄 Loading transcript...');
+        // Ensure clips output directory exists
+        const clipsDir = path_1.default.resolve('./storage/clips');
+        if (!fs_1.default.existsSync(clipsDir)) {
+            console.log(`   Creating clips directory: ${clipsDir}`);
+            fs_1.default.mkdirSync(clipsDir, { recursive: true });
+        }
+        console.log(`   Clips dir: ${clipsDir} (exists: true)`);
+        // Ensure temp directory exists
+        const tempDir = path_1.default.resolve('./storage/temp');
+        if (!fs_1.default.existsSync(tempDir)) {
+            console.log(`   Creating temp directory: ${tempDir}`);
+            fs_1.default.mkdirSync(tempDir, { recursive: true });
+        }
+        console.log('   ✅ STAGE 4 PASSED');
+        // ===== STAGE 5: LOAD & ANALYZE TRANSCRIPT =====
+        currentStage = 'STAGE_5_ANALYZE_TRANSCRIPT';
+        console.log('\n📄 STAGE 5: Loading and analyzing transcript...');
         let transcript;
         try {
             const transcriptData = fs_1.default.readFileSync(job.transcriptPath, 'utf-8');
             transcript = JSON.parse(transcriptData);
-            console.log(`✅ Transcript loaded: ${transcript.segments.length} segments`);
+            console.log(`   Segments: ${transcript.segments?.length ?? 'NULL ⚠️'}`);
+            console.log(`   Language: ${transcript.language ?? 'NULL'}`);
+            console.log(`   Duration: ${transcript.duration ?? 'NULL'}`);
+            if (!transcript.segments || transcript.segments.length === 0) {
+                console.error('   ❌ STAGE 5 FAILED — Transcript has no segments');
+                return res.status(400).json({
+                    success: false,
+                    stage: currentStage,
+                    message: 'Transcript file has no segments',
+                    hint: 'The transcription may have produced empty results'
+                });
+            }
         }
         catch (parseError) {
-            console.error('❌ Transcript parse error:', parseError.message);
+            console.error('   ❌ STAGE 5 FAILED — Transcript parse error');
+            console.error('   Error:', parseError.message);
             return res.status(500).json({
                 success: false,
+                stage: currentStage,
                 message: 'Failed to parse transcript file',
                 error: parseError.message
             });
         }
-        // ===== ANALYZE TRANSCRIPT =====
-        console.log('🔍 Analyzing transcript for clip candidates...');
         let analysis;
         try {
             analysis = clipDetector_1.clipDetector.analyzeTranscript(transcript, maxClips);
-            console.log(`✅ Found ${analysis.candidates.length} clip candidates`);
+            console.log(`   Clip candidates found: ${analysis.candidates.length}`);
         }
         catch (analysisError) {
-            console.error('❌ Clip analysis error:', analysisError.message);
+            console.error('   ❌ STAGE 5 FAILED — clipDetector.analyzeTranscript threw');
+            console.error('   Error:', analysisError.message);
+            console.error('   Stack:', analysisError.stack);
             return res.status(500).json({
                 success: false,
+                stage: currentStage,
                 message: 'Failed to analyze transcript',
                 error: analysisError.message
             });
         }
         const candidates = analysis.candidates;
         if (candidates.length === 0) {
-            console.warn('⚠️  No suitable clips found');
+            console.warn('   ⚠️ No suitable clips found');
             return res.status(400).json({
                 success: false,
+                stage: currentStage,
                 message: 'No suitable clips found in the transcript'
             });
         }
-        // ===== DETERMINE CLIPS TO RENDER =====
         let clipsToRender = candidates;
         if (clipIndices && Array.isArray(clipIndices)) {
             clipsToRender = clipIndices
                 .filter(idx => idx >= 0 && idx < candidates.length)
                 .map(idx => candidates[idx]);
-            console.log(`📌 Rendering selected ${clipsToRender.length} clips`);
         }
-        else {
-            console.log(`📌 Rendering all ${clipsToRender.length} clips`);
-        }
-        // ===== RENDER CLIPS =====
-        console.log('🎬 Starting clip rendering...');
+        console.log(`   Clips to render: ${clipsToRender.length}`);
+        console.log('   ✅ STAGE 5 PASSED');
+        // ===== STAGE 6: RENDER CLIPS (FFmpeg) =====
+        currentStage = 'STAGE_6_RENDER_CLIPS';
+        console.log('\n🎬 STAGE 6: Rendering clips with FFmpeg...');
         const generatedClips = [];
-        const isCloudinaryConfigured = cloudinaryService_1.cloudinaryService.isConfigured();
+        const failedClips = [];
         for (let i = 0; i < clipsToRender.length; i++) {
             const candidate = clipsToRender[i];
-            console.log(`  ⏳ Rendering clip ${i + 1}/${clipsToRender.length} (${candidate.startTime.toFixed(1)}s - ${candidate.endTime.toFixed(1)}s)...`);
+            console.log(`\n   --- Clip ${i + 1}/${clipsToRender.length} ---`);
+            console.log(`   Time: ${candidate.startTime.toFixed(1)}s → ${candidate.endTime.toFixed(1)}s (${candidate.duration.toFixed(1)}s)`);
             try {
-                // Cut clip using FFmpeg (now outputs 9:16 vertical format)
+                // 6a: Cut clip using FFmpeg
+                console.log(`   [6a] FFmpeg cutting...`);
                 const clipPath = await videoCutter_1.videoCutter.cutClip(job.videoPath, candidate.startTime, candidate.endTime, jobId, i);
-                console.log(`    ✅ Clip rendered: ${path_1.default.basename(clipPath)}`);
+                console.log(`   [6a] ✅ Clip file: ${path_1.default.basename(clipPath)}`);
                 const clipId = (0, uuid_1.v4)();
-                let cloudinaryPublicId = null;
-                let cloudinaryUrl = null;
-                // Upload to Cloudinary if configured
-                if (isCloudinaryConfigured) {
-                    try {
-                        console.log(`    ☁️ Uploading to Cloudinary...`);
-                        const uploadResult = await cloudinaryService_1.cloudinaryService.uploadClip(clipPath, `${jobId}_${i}`);
-                        cloudinaryPublicId = uploadResult.publicId;
-                        cloudinaryUrl = uploadResult.secureUrl;
-                        console.log(`    ✅ Cloudinary upload success: ${cloudinaryUrl}`);
-                        // Delete local file after successful upload
-                        cloudinaryService_1.cloudinaryService.deleteLocalFile(clipPath);
-                    }
-                    catch (cloudinaryError) {
-                        console.error(`    ⚠️ Cloudinary upload failed, keeping local file:`, cloudinaryError.message);
-                        // Continue with local storage as fallback
-                    }
-                }
-                // Save to database
+                // 6b: Save to Supabase
+                console.log(`   [6b] Saving to Supabase (video_path: local disk)...`);
                 try {
-                    database_1.queries.insertClip.run(clipId, jobId, i, // clip_index
-                    clipPath, // video_path
-                    cloudinaryPublicId, // cloudinary_public_id
-                    cloudinaryUrl, // cloudinary_url
-                    candidate.startTime, // start_time
-                    candidate.endTime, // end_time
-                    candidate.duration, // duration
-                    candidate.text, // text
-                    candidate.score.total, // score_total
-                    candidate.score.durationScore, // score_duration
-                    candidate.score.keywordScore, // score_keyword
-                    candidate.score.completenessScore, // score_completeness
-                    JSON.stringify(candidate.score.keywords), // keywords (JSON)
-                    0, // selected (false)
-                    1 // rendered (true)
-                    );
-                    console.log(`    ✅ Saved to database: ${clipId}`);
+                    await database_1.queries.insertClip(clipId, jobId, i, clipPath, candidate.startTime, candidate.endTime, candidate.duration, candidate.text, candidate.score.total, candidate.score.durationScore, candidate.score.keywordScore, candidate.score.completenessScore, JSON.stringify(candidate.score.keywords), 0, 1);
+                    console.log(`   [6b] ✅ Supabase insert success (clipId: ${clipId})`);
                 }
                 catch (dbInsertError) {
-                    console.error(`    ❌ Database insert error for clip ${i}:`, dbInsertError.message);
-                    throw new Error(`Failed to save clip ${i} to database: ${dbInsertError.message}`);
+                    console.error(`   [6b] ❌ SUPABASE INSERT FAILED for clip ${i}`);
+                    console.error(`   [6b] Error: ${dbInsertError.message}`);
+                    console.error(`   [6b] Full error:`, JSON.stringify(dbInsertError, null, 2));
+                    failedClips.push({ index: i, error: `Supabase insert: ${dbInsertError.message}`, stage: 'STAGE_6b_DB_INSERT' });
+                    continue;
                 }
-                // Determine video URL (prefer Cloudinary URL if available)
-                const videoUrl = cloudinaryUrl || `/storage/clips/${path_1.default.basename(clipPath)}`;
+                const videoUrl = `/storage/clips/${path_1.default.basename(clipPath)}`;
                 generatedClips.push({
                     id: clipId,
                     jobId,
                     clipIndex: i,
                     videoPath: clipPath,
                     videoUrl: videoUrl,
-                    cloudinaryUrl: cloudinaryUrl,
                     filename: path_1.default.basename(clipPath),
                     startTime: candidate.startTime,
                     endTime: candidate.endTime,
@@ -301,31 +407,133 @@ router.post('/render', async (req, res) => {
                     createdAt: new Date().toISOString()
                 });
             }
-            catch (ffmpegError) {
-                console.error(`    ❌ FFmpeg error for clip ${i}:`, ffmpegError.message);
-                throw new Error(`Failed to render clip ${i}: ${ffmpegError.message}`);
+            catch (clipError) {
+                console.error(`   ❌ Clip ${i} FAILED`);
+                console.error(`   Error: ${clipError.message}`);
+                if (clipError.stderr)
+                    console.error(`   FFmpeg stderr: ${clipError.stderr.slice(-300)}`);
+                failedClips.push({ index: i, error: clipError.message, stage: 'STAGE_6_FFMPEG' });
             }
         }
+        console.log(`\n   STAGE 6 SUMMARY: ${generatedClips.length} succeeded, ${failedClips.length} failed`);
+        // ===== STAGE 7: RETURN RESPONSE =====
+        currentStage = 'STAGE_7_RESPONSE';
         const renderTime = Date.now() - startTime;
-        console.log(`✅ Rendered and saved ${generatedClips.length} clips in ${(renderTime / 1000).toFixed(1)}s\n`);
-        res.json({
-            success: true,
-            jobId,
-            clips: generatedClips,
-            count: generatedClips.length,
-            message: 'Clips rendered and saved to database'
-        });
+        if (generatedClips.length === 0) {
+            console.error(`\n❌ ALL ${clipsToRender.length} clips failed (${(renderTime / 1000).toFixed(1)}s)`);
+            return res.status(500).json({
+                success: false,
+                stage: currentStage,
+                message: 'All clips failed to render',
+                failedClips,
+                renderTimeMs: renderTime,
+                hint: 'Check failedClips array for per-clip errors'
+            });
+        }
+        if (failedClips.length > 0) {
+            console.warn(`⚠️ ${failedClips.length}/${clipsToRender.length} clips failed, ${generatedClips.length} succeeded`);
+        }
+        console.log(`\n✅ RENDER COMPLETE: ${generatedClips.length} clips in ${(renderTime / 1000).toFixed(1)}s`);
+        // Pre-validate clips to prevent serialization crashes
+        const safeClips = generatedClips.map((clip, idx) => {
+            try {
+                // Ensure all fields are serializable (no circular refs, no undefined funcs)
+                const safe = {
+                    id: clip.id || '',
+                    jobId: clip.jobId || jobId,
+                    clipIndex: typeof clip.clipIndex === 'number' ? clip.clipIndex : idx,
+                    videoPath: typeof clip.videoPath === 'string' ? clip.videoPath : '',
+                    videoUrl: typeof clip.videoUrl === 'string' ? clip.videoUrl : '',
+                    filename: typeof clip.filename === 'string' ? clip.filename : '',
+                    startTime: clip.startTime ?? 0,
+                    endTime: clip.endTime ?? 0,
+                    duration: clip.duration ?? 0,
+                    text: clip.text || '',
+                    score: {
+                        total: clip.score?.total ?? 0,
+                        durationScore: clip.score?.durationScore ?? 0,
+                        keywordScore: clip.score?.keywordScore ?? 0,
+                        completenessScore: clip.score?.completenessScore ?? 0,
+                        keywords: Array.isArray(clip.score?.keywords) ? clip.score.keywords : []
+                    },
+                    selected: !!clip.selected,
+                    createdAt: clip.createdAt || new Date().toISOString()
+                };
+                return safe;
+            }
+            catch (clipErr) {
+                console.error(`   ❌ Clip ${idx} validation failed:`, clipErr.message);
+                return null;
+            }
+        }).filter(Boolean);
+        console.log(`   Safe clips count: ${safeClips.length}`);
+        console.log(`   Headers already sent: ${res.headersSent}`);
+        if (res.headersSent) {
+            console.error('   ❌ FATAL: Headers already sent before STAGE 7 response!');
+            return;
+        }
+        try {
+            const responsePayload = {
+                success: true,
+                jobId,
+                clips: safeClips,
+                count: safeClips.length,
+                failedCount: failedClips.length,
+                failedClips: failedClips.length > 0 ? failedClips : undefined,
+                renderTimeMs: renderTime,
+                message: failedClips.length > 0
+                    ? `${safeClips.length} clips rendered, ${failedClips.length} failed`
+                    : 'Clips rendered and saved to database'
+            };
+            // Test serialization BEFORE sending
+            JSON.stringify(responsePayload);
+            console.log('   ✅ Response payload serializes OK');
+            res.json(responsePayload);
+            console.log('   ✅ STAGE 7: Response sent successfully');
+        }
+        catch (responseErr) {
+            console.error('   ❌ STAGE 7: Response serialization/send FAILED');
+            console.error('   Error:', responseErr.message);
+            console.error('   Stack:', responseErr.stack);
+            if (!res.headersSent) {
+                res.status(500).json({
+                    success: false,
+                    stage: 'STAGE_7_RESPONSE_SERIALIZE',
+                    message: `Failed to send response: ${responseErr.message}`,
+                });
+            }
+        }
+        console.log('========================================\n');
     }
     catch (error) {
         const renderTime = Date.now() - startTime;
-        console.error(`❌ === CLIP RENDER FAILED (${(renderTime / 1000).toFixed(1)}s) ===`);
-        console.error('Error:', error.message);
-        console.error('Stack:', error.stack);
-        res.status(500).json({
-            success: false,
-            message: error.message || 'Failed to render clips',
-            error: error.stack
-        });
+        console.error('\n❌ ========================================');
+        console.error('   RENDER_CLIPS_FATAL — Unhandled crash');
+        console.error('========================================');
+        console.error(`Stage:   ${currentStage}`);
+        console.error(`Time:    ${(renderTime / 1000).toFixed(1)}s`);
+        console.error(`Message: ${error.message}`);
+        console.error(`Stack:   ${error.stack}`);
+        console.error('========================================\n');
+        try {
+            if (!res.headersSent) {
+                res.status(500).json({
+                    success: false,
+                    stage: currentStage,
+                    message: error instanceof Error ? error.message : 'Unknown error',
+                    error: error instanceof Error ? error.message : String(error),
+                    stack: process.env.NODE_ENV !== 'production' ? error.stack : undefined,
+                    renderTimeMs: renderTime,
+                    hint: `Failure occurred at ${currentStage}. Check backend terminal for full stack trace.`
+                });
+            }
+            else {
+                console.error('   ⚠️ Could not send error response (headers already sent)');
+            }
+        }
+        catch (finalErr) {
+            console.error('   ⚠️ Could not send error response:', finalErr);
+        }
     }
 });
 /**
@@ -335,15 +543,15 @@ router.post('/render', async (req, res) => {
 router.get('/:jobId', async (req, res) => {
     try {
         const { jobId } = req.params;
-        const clips = database_1.queries.getClipsByJob.all(jobId);
+        const clips = await database_1.queries.getClipsByJob(jobId);
         // Format clips for frontend
         const formattedClips = clips.map((c) => ({
             id: c.id,
             jobId: c.job_id,
             clipIndex: c.clip_index,
             videoPath: c.video_path,
-            videoUrl: `/storage/clips/${path_1.default.basename(c.video_path)}`,
-            filename: path_1.default.basename(c.video_path),
+            videoUrl: buildVideoUrl(c),
+            filename: path_1.default.basename(c.video_path || ''),
             startTime: c.start_time,
             endTime: c.end_time,
             duration: c.duration,
@@ -353,10 +561,11 @@ router.get('/:jobId', async (req, res) => {
                 durationScore: c.score_duration,
                 keywordScore: c.score_keyword,
                 completenessScore: c.score_completeness,
-                keywords: c.keywords ? JSON.parse(c.keywords) : []
+                keywords: safeParseKeywords(c.keywords)
             },
-            selected: c.selected === 1,
-            createdAt: c.created_at
+            selected: !!c.selected,
+            createdAt: c.created_at,
+            updatedAt: c.updated_at || c.created_at
         }));
         res.json({
             success: true,
@@ -387,13 +596,7 @@ router.put('/:clipId/select', async (req, res) => {
                 message: 'selected must be a boolean'
             });
         }
-        const result = database_1.queries.updateClipSelection.run(selected ? 1 : 0, clipId);
-        if (result.changes === 0) {
-            return res.status(404).json({
-                success: false,
-                message: 'Clip not found'
-            });
-        }
+        await database_1.queries.updateClipSelection(selected ? 1 : 0, clipId);
         res.json({
             success: true,
             clipId,
@@ -415,7 +618,7 @@ router.put('/:clipId/select', async (req, res) => {
 router.get('/:jobId/selected', async (req, res) => {
     try {
         const { jobId } = req.params;
-        const selectedClips = database_1.queries.getSelectedClips.all(jobId);
+        const selectedClips = await database_1.queries.getSelectedClips(jobId);
         // Format clips
         const formattedClips = selectedClips.map((c) => ({
             id: c.id,
@@ -443,99 +646,20 @@ router.get('/:jobId/selected', async (req, res) => {
     }
 });
 /**
- * POST /api/clips/:clipId/render-final
- * Render final video with burned-in subtitles
- */
-router.post('/:clipId/render-final', async (req, res) => {
-    const { clipId } = req.params;
-    const { language = 'en', useEditedSubtitles = true } = req.body;
-    try {
-        // Parse clipId
-        const clipIdMatch = clipId.match(/^(?:clip_)?(.+?)_(\d+)(?:\.mp4)?$/);
-        if (!clipIdMatch) {
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid clip ID format',
-            });
-        }
-        const [, jobId, clipIndexStr] = clipIdMatch;
-        const clipIndex = parseInt(clipIndexStr);
-        // Find clip file
-        const clipsDir = videoCutter_1.videoCutter.getClipStorageDir();
-        const clipFilename = `clip_${jobId}_${clipIndex}.mp4`;
-        const clipPath = path_1.default.join(clipsDir, clipFilename);
-        if (!fs_1.default.existsSync(clipPath)) {
-            return res.status(404).json({
-                success: false,
-                message: 'Clip file not found',
-            });
-        }
-        // Load subtitles (edited or original)
-        const subtitlesDir = path_1.default.resolve('./storage/subtitles');
-        let subtitlesFile;
-        if (useEditedSubtitles) {
-            subtitlesFile = path_1.default.join(subtitlesDir, `${clipId}_${language}_edited.json`);
-            if (!fs_1.default.existsSync(subtitlesFile)) {
-                // Fall back to original if edited not found
-                subtitlesFile = path_1.default.join(subtitlesDir, `${clipId}_${language}.json`);
-            }
-        }
-        else {
-            subtitlesFile = path_1.default.join(subtitlesDir, `${clipId}_${language}.json`);
-        }
-        if (!fs_1.default.existsSync(subtitlesFile)) {
-            return res.status(404).json({
-                success: false,
-                message: 'Subtitles not found. Please generate subtitles first.',
-            });
-        }
-        const subtitlesData = JSON.parse(fs_1.default.readFileSync(subtitlesFile, 'utf-8'));
-        const segments = subtitlesData.segments;
-        // Render final video
-        const { subtitleRenderer } = require('../services/subtitleRenderer');
-        const startTime = Date.now();
-        const finalVideoPath = await subtitleRenderer.renderWithSubtitles(clipPath, segments, clipId);
-        const renderTime = ((Date.now() - startTime) / 1000).toFixed(1);
-        // Generate URL for final video
-        const filename = path_1.default.basename(finalVideoPath);
-        const finalVideoUrl = `/storage/final/${filename}`;
-        res.json({
-            success: true,
-            clipId,
-            finalVideoUrl,
-            finalVideoPath,
-            renderTime: parseFloat(renderTime),
-            language,
-            subtitleCount: segments.length,
-        });
-    }
-    catch (error) {
-        console.error('Error rendering final video:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message || 'Failed to render final video',
-        });
-    }
-});
-/**
  * GET /api/clips/:clipId/download
  * Download a single clip as MP4
  */
 router.get('/:clipId/download', async (req, res) => {
     const { clipId } = req.params;
     try {
-        const clip = database_1.queries.getClipById.get(clipId);
+        const clip = await database_1.queries.getClipById(clipId);
         if (!clip) {
             return res.status(404).json({
                 success: false,
                 message: 'Clip not found',
             });
         }
-        // Prefer Cloudinary URL if available
-        if (clip.cloudinary_url) {
-            return res.redirect(clip.cloudinary_url);
-        }
-        // Fall back to local file
+        // Serve local file
         const clipPath = clip.video_path;
         if (!fs_1.default.existsSync(clipPath)) {
             return res.status(404).json({
@@ -576,36 +700,24 @@ router.post('/download-zip', async (req, res) => {
         if (clipIds.length === 1) {
             return res.redirect(307, `/api/clips/${clipIds[0]}/download`);
         }
-        // Require authentication for 2+ clips
-        const authHeader = req.headers.authorization;
-        if (!authHeader || !authHeader.startsWith('Bearer ')) {
-            return res.status(401).json({
-                success: false,
-                message: 'Authentication required for multi-clip download. Please log in.',
-            });
-        }
-        // Verify JWT token
-        const { authService } = require('../services/auth/authService');
-        const token = authHeader.substring(7);
-        const decoded = authService.verifyToken(token);
-        if (!decoded) {
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid or expired token. Please log in again.',
-            });
-        }
-        console.log(`📦 ZIP download requested by user ${decoded.userId} for ${clipIds.length} clips`);
+        console.log(`📦 ZIP download requested for ${clipIds.length} clips`);
         // Fetch clip paths
         const clipPaths = [];
         let jobId = '';
         for (const clipId of clipIds) {
-            const clip = database_1.queries.getClipById.get(clipId);
+            const clip = await database_1.queries.getClipById(clipId);
+            // #region agent log
+            _dbglog('clips.ts:zip-lookup', 'Clip lookup for ZIP', { clipId, found: !!clip, videoPath: clip?.video_path || null, fileExists: clip ? fs_1.default.existsSync(clip.video_path) : false, fileSize: clip && fs_1.default.existsSync(clip.video_path) ? fs_1.default.statSync(clip.video_path).size : 0 }, 'ZIP-H1');
+            // #endregion
             if (clip && fs_1.default.existsSync(clip.video_path)) {
                 clipPaths.push(clip.video_path);
                 if (!jobId)
                     jobId = clip.job_id;
             }
         }
+        // #region agent log
+        _dbglog('clips.ts:zip-paths', 'Clip paths resolved', { clipPathCount: clipPaths.length, clipPaths, jobId }, 'ZIP-H1');
+        // #endregion
         if (clipPaths.length === 0) {
             return res.status(404).json({
                 success: false,
@@ -620,8 +732,16 @@ router.post('/download-zip', async (req, res) => {
         res.setHeader('Content-Disposition', `attachment; filename="${zipFilename}"`);
         // Create and stream ZIP
         const zipStream = zipExporter.createZipStream(clipPaths);
-        zipStream.pipe(res);
+        zipStream.on('end', () => {
+            // #region agent log
+            _dbglog('clips.ts:zip-end', 'ZIP stream ended successfully', { clipPathCount: clipPaths.length }, 'ZIP-H2');
+            // #endregion
+            console.log('📦 ZIP stream completed successfully');
+        });
         zipStream.on('error', (err) => {
+            // #region agent log
+            _dbglog('clips.ts:zip-error', 'ZIP stream ERROR', { error: err.message, stack: err.stack }, 'ZIP-H2');
+            // #endregion
             console.error('ZIP stream error:', err);
             if (!res.headersSent) {
                 res.status(500).json({
@@ -630,8 +750,17 @@ router.post('/download-zip', async (req, res) => {
                 });
             }
         });
+        res.on('close', () => {
+            // #region agent log
+            _dbglog('clips.ts:res-close', 'Response closed', { headersSent: res.headersSent, writableEnded: res.writableEnded, statusCode: res.statusCode }, 'ZIP-H3');
+            // #endregion
+        });
+        zipStream.pipe(res);
     }
     catch (error) {
+        // #region agent log
+        _dbglog('clips.ts:zip-catch', 'ZIP endpoint CATCH error', { error: error.message, stack: error.stack }, 'ZIP-H2');
+        // #endregion
         console.error('ZIP download error:', error);
         res.status(500).json({
             success: false,

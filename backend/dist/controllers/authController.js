@@ -5,8 +5,8 @@ exports.register = register;
 exports.login = login;
 exports.getMe = getMe;
 const authService_1 = require("../services/auth/authService");
-// Use SQL Server user service
-const userServiceSql_1 = require("../services/userServiceSql");
+// Use Supabase user service
+const userService_1 = require("../services/auth/userService");
 /**
  * POST /api/auth/register
  * Register a new user
@@ -40,7 +40,7 @@ async function register(req, res) {
             return;
         }
         // Check if user already exists
-        const existingEmail = await userServiceSql_1.userServiceSql.findByEmail(email);
+        const existingEmail = await userService_1.userService.findByEmail(email);
         if (existingEmail) {
             res.status(409).json({
                 success: false,
@@ -48,7 +48,7 @@ async function register(req, res) {
             });
             return;
         }
-        const existingUsername = await userServiceSql_1.userServiceSql.findByUsername(username);
+        const existingUsername = await userService_1.userService.findByUsername(username);
         if (existingUsername) {
             res.status(409).json({
                 success: false,
@@ -63,7 +63,7 @@ async function register(req, res) {
             password,
             role: role || 'user' // Default role
         };
-        const user = await userServiceSql_1.userServiceSql.createUser(userData);
+        const user = await userService_1.userService.createUser(userData);
         console.log(`✅ New user registered: ${username} (${email})`);
         res.status(201).json({
             success: true,
@@ -95,7 +95,7 @@ async function login(req, res) {
             return;
         }
         // Find user by email
-        const user = await userServiceSql_1.userServiceSql.findByEmail(email);
+        const user = await userService_1.userService.findByEmail(email);
         if (!user) {
             res.status(401).json({
                 success: false,
@@ -123,7 +123,7 @@ async function login(req, res) {
             success: true,
             message: 'Login successful.',
             token,
-            user: userServiceSql_1.userServiceSql.toUserResponse(user)
+            user: userService_1.userService.toUserResponse(user)
         });
     }
     catch (error) {
@@ -148,7 +148,7 @@ async function getMe(req, res) {
             return;
         }
         // Get full user from database
-        const user = await userServiceSql_1.userServiceSql.findById(req.user.userId);
+        const user = await userService_1.userService.findById(req.user.userId);
         if (!user) {
             res.status(404).json({
                 success: false,
@@ -158,7 +158,7 @@ async function getMe(req, res) {
         }
         res.json({
             success: true,
-            user: userServiceSql_1.userServiceSql.toUserResponse(user)
+            user: userService_1.userService.toUserResponse(user)
         });
     }
     catch (error) {
