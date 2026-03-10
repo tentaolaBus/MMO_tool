@@ -1,0 +1,48 @@
+# render.yaml — Render Blueprint for MMO Video Clipper
+# Place in repo root. Render auto-detects this file when connecting a repo.
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  # ─── Backend API (Docker) ──────────────────────────────────
+  - type: web
+    name: mmo-clipper-backend
+    runtime: docker
+    region: singapore
+    plan: free
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: SUPABASE_URL
+        sync: false   # set manually in Render dashboard
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: FRONTEND_URL
+        sync: false   # e.g. https://mmo-clipper-frontend.onrender.com
+      - key: AI_SERVICE_URL
+        sync: false   # set if ai-service is deployed somewhere
+
+  # ─── Frontend (Next.js SSR) ────────────────────────────────
+  - type: web
+    name: mmo-clipper-frontend
+    runtime: node
+    region: singapore
+    plan: free
+    rootDir: frontend
+    buildCommand: npm install && npm run build
+    startCommand: npm run start
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        sync: false   # e.g. https://mmo-clipper-backend.onrender.com/api
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false

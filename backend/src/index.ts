@@ -20,8 +20,23 @@ import './services/database';
 
 const app = express();
 
-// Middleware
-app.use(cors());
+// CORS configuration — restrict origins in production
+const allowedOrigins = [
+    process.env.FRONTEND_URL,
+    'http://localhost:3000',
+].filter(Boolean) as string[];
+
+app.use(cors({
+    origin: (origin, callback) => {
+        // Allow requests with no origin (mobile apps, curl, server-to-server)
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true,
+}));
 app.use(express.json());
 
 // Serve storage files (videos, clips, transcripts)
