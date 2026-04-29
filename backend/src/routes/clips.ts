@@ -3,18 +3,12 @@ import fs from 'fs';
 import path from 'path';
 import { clipDetector } from '../services/clipDetector';
 import { videoCutter } from '../services/videoCutter';
-import { jobQueue } from '../services/queue';
+import { getVideoJob, getAllVideoJobs, readJobProgress } from '../services/queue';
 import { queries } from '../services/database';
 import { Transcript } from '../models/job';
 import { ClipCandidate, ClipAnalysisResult } from '../models/clip';
 import { v4 as uuidv4 } from 'uuid';
 
-
-// #region agent log
-const _dbglog = (loc: string, msg: string, data: any = {}, hyp: string = '') => {
-    try { fs.appendFileSync(path.resolve(__dirname, '../../..', 'debug-0170bb.log'), JSON.stringify({ sessionId: '0170bb', location: loc, message: msg, data, timestamp: Date.now(), hypothesisId: hyp }) + '\n'); } catch { }
-};
-// #endregion
 
 const router = Router();
 
@@ -85,7 +79,7 @@ router.post('/analyze', async (req: Request, res: Response) => {
         }
 
         // Get job
-        const job = jobQueue.getJob(jobId);
+        const job = await getVideoJob(jobId);
         if (!job) {
             return res.status(404).json({
                 success: false,
@@ -94,7 +88,8 @@ router.post('/analyze', async (req: Request, res: Response) => {
         }
 
         // Check if transcript exists
-        if (!job.transcriptPath) {
+        const transcriptPath = job.returnvalue?.transcriptPath;
+        if (!transcriptPath) {
             return res.status(400).json({
                 success: false,
                 message: 'Transcript not available'
@@ -102,7 +97,7 @@ router.post('/analyze', async (req: Request, res: Response) => {
         }
 
         // Load transcript
-        const transcriptData = fs.readFileSync(job.transcriptPath, 'utf-8');
+        const transcriptData = fs.readFileSync(transcriptPath, 'utf-8');
         const transcript: Transcript = JSON.parse(transcriptData);
 
         // Analyze and get candidates
@@ -219,54 +214,66 @@ router.post('/render', async (req: Request, res: Response) => {
             });
         }
 
-        // ===== STAGE 2: FETCH JOB FROM IN-MEMORY QUEUE =====
+        // ===== STAGE 2: FETCH JOB FROM BULLMQ QUEUE =====
         currentStage = 'STAGE_2_FETCH_JOB';
-        console.log('\n📦 STAGE 2: Fetching job from in-memory queue...');
-        const job = jobQueue.getJob(jobId);
+        console.log('\n📦 STAGE 2: Fetching job from BullMQ queue...');
+        const job = await getVideoJob(jobId);
         if (!job) {
-            console.error(`   ❌ STAGE 2 FAILED — Job "${jobId}" not in memory`);
+            console.error(`   ❌ STAGE 2 FAILED — Job "${jobId}" not found in queue`);
+            const allJobs = await getAllVideoJobs();
+            const allJobsList = [...allJobs.waiting, ...allJobs.active, ...allJobs.completed, ...allJobs.failed];
             console.error('   Available jobs:', JSON.stringify(
-                jobQueue.getAllJobs().map(j => ({ id: j.id, status: j.status }))
+                allJobsList.map((j: any) => ({ id: j.id, status: j.finishedOn ? 'completed' : 'pending' }))
             ));
             return res.status(404).json({
                 success: false,
                 stage: currentStage,
-                message: `Job not found in memory: ${jobId}`,
-                hint: 'The in-memory job queue loses data on server restart. Re-upload the video.'
+                message: `Job not found: ${jobId}`,
+                hint: 'The job may have been removed. Re-upload the video.'
             });
         }
 
+        const jobState = await job.getState();
+        // Normalize: BullMQ progress may be number OR { percent, stage, message }.
+        // Never cast directly — would silently push the object into Postgres INTEGER.
+        const jobProgress = readJobProgress(job.progress);
+        const jobVideoPath = job.data.videoPath;
+        const jobAudioPath = job.returnvalue?.audioPath;
+        const jobTranscriptPath = job.returnvalue?.transcriptPath;
+        const jobError = job.failedReason;
+
         console.log('   JOB DETAILS:');
         console.log(`     id:             ${job.id}`);
-        console.log(`     status:         ${job.status}`);
-        console.log(`     progress:       ${job.progress}`);
-        console.log(`     videoPath:      ${job.videoPath ?? 'NULL ⚠️'}`);
-        console.log(`     audioPath:      ${job.audioPath ?? 'NULL'}`);
-        console.log(`     transcriptPath: ${job.transcriptPath ?? 'NULL ⚠️'}`);
+        console.log(`     status:         ${jobState}`);
+        console.log(`     progress:       ${jobProgress.percent}% (${jobProgress.stage})`);
+        console.log(`     videoPath:      ${jobVideoPath ?? 'NULL ⚠️'}`);
+        console.log(`     audioPath:      ${jobAudioPath ?? 'NULL'}`);
+        console.log(`     transcriptPath: ${jobTranscriptPath ?? 'NULL ⚠️'}`);
         console.log('   ✅ STAGE 2 PASSED');
 
         // ===== STAGE 2.5: CHECK JOB STATUS =====
         currentStage = 'STAGE_2_5_CHECK_STATUS';
         console.log(`\n⏳ STAGE 2.5: Checking job processing status...`);
-        console.log(`   Current status: ${job.status}`);
+        console.log(`   Current status: ${jobState}`);
 
-        if (job.status === 'pending' || job.status === 'processing') {
-            console.log(`   ⏳ Job still ${job.status} — returning 202 (retry later)`);
+        if (jobState === 'waiting' || jobState === 'active') {
+            console.log(`   ⏳ Job still ${jobState} — returning 202 (retry later)`);
             return res.status(202).json({
                 success: false,
-                status: job.status,
-                progress: job.progress || 0,
-                message: `Transcription still in progress (${job.status}).`,
+                status: jobState,
+                progress: jobProgress.percent,
+                progressDetail: jobProgress,
+                message: `Transcription still in progress (${jobState}).`,
                 retryAfterMs: 5000
             });
         }
 
-        if (job.status === 'failed') {
-            console.log(`   ❌ Job failed: ${job.error}`);
+        if (jobState === 'failed') {
+            console.log(`   ❌ Job failed: ${jobError}`);
             return res.status(422).json({
                 success: false,
                 status: 'failed',
-                message: job.error || 'Transcription failed',
+                message: jobError || 'Transcription failed',
                 hint: 'Re-upload the video to try again'
             });
         }
@@ -283,12 +290,12 @@ router.post('/render', async (req: Request, res: Response) => {
             if (!existingJob) {
                 console.log(`   Upserting job into Supabase (jobId: ${jobId})...`);
                 await queries.insertJob(
-                    job.id,
-                    job.status,
-                    job.progress || 0,
-                    job.videoPath || '',
-                    job.audioPath || null,
-                    job.transcriptPath || null
+                    job.id!,
+                    jobState,
+                    jobProgress.percent,
+                    jobVideoPath || '',
+                    jobAudioPath || null,
+                    jobTranscriptPath || null
                 );
                 console.log(`   ✅ Job upserted into Supabase (jobId: ${jobId})`);
             }
@@ -310,29 +317,29 @@ router.post('/render', async (req: Request, res: Response) => {
         console.log('\n📂 STAGE 4: Verifying file system...');
 
         // Check video file
-        const videoExists = job.videoPath ? fs.existsSync(job.videoPath) : false;
-        console.log(`   Video path:  ${job.videoPath ?? 'NULL'}`);
+        const videoExists = jobVideoPath ? fs.existsSync(jobVideoPath) : false;
+        console.log(`   Video path:  ${jobVideoPath ?? 'NULL'}`);
         console.log(`   Video exists: ${videoExists}`);
-        if (!job.videoPath || !videoExists) {
+        if (!jobVideoPath || !videoExists) {
             console.error('   ❌ STAGE 4 FAILED — Video file not found');
             return res.status(400).json({
                 success: false,
                 stage: currentStage,
-                message: `Video file not found: ${job.videoPath}`,
+                message: `Video file not found: ${jobVideoPath}`,
                 hint: 'The video file may have been deleted or the path is wrong'
             });
         }
 
         // Check transcript file
-        const transcriptExists = job.transcriptPath ? fs.existsSync(job.transcriptPath) : false;
-        console.log(`   Transcript path:  ${job.transcriptPath ?? 'NULL'}`);
+        const transcriptExists = jobTranscriptPath ? fs.existsSync(jobTranscriptPath) : false;
+        console.log(`   Transcript path:  ${jobTranscriptPath ?? 'NULL'}`);
         console.log(`   Transcript exists: ${transcriptExists}`);
-        if (!job.transcriptPath || !transcriptExists) {
+        if (!jobTranscriptPath || !transcriptExists) {
             console.error('   ❌ STAGE 4 FAILED — Transcript file not found');
             return res.status(400).json({
                 success: false,
                 stage: currentStage,
-                message: `Transcript not available: ${job.transcriptPath}`,
+                message: `Transcript not available: ${jobTranscriptPath}`,
                 hint: 'Wait for transcription to complete before rendering clips'
             });
         }
@@ -359,7 +366,7 @@ router.post('/render', async (req: Request, res: Response) => {
         console.log('\n📄 STAGE 5: Loading and analyzing transcript...');
         let transcript: Transcript;
         try {
-            const transcriptData = fs.readFileSync(job.transcriptPath, 'utf-8');
+            const transcriptData = fs.readFileSync(jobTranscriptPath, 'utf-8');
             transcript = JSON.parse(transcriptData);
             console.log(`   Segments: ${transcript.segments?.length ?? 'NULL ⚠️'}`);
             console.log(`   Language: ${transcript.language ?? 'NULL'}`);
@@ -435,7 +442,7 @@ router.post('/render', async (req: Request, res: Response) => {
                 // 6a: Cut clip using FFmpeg
                 console.log(`   [6a] FFmpeg cutting...`);
                 const clipPath = await videoCutter.cutClip(
-                    job.videoPath,
+                    jobVideoPath,
                     candidate.startTime,
                     candidate.endTime,
                     jobId,
@@ -824,18 +831,13 @@ router.post('/download-zip', async (req: Request, res: Response) => {
 
         for (const clipId of clipIds) {
             const clip = await queries.getClipById(clipId) as ClipRow | undefined;
-            // #region agent log
-            _dbglog('clips.ts:zip-lookup', 'Clip lookup for ZIP', { clipId, found: !!clip, videoPath: clip?.video_path || null, fileExists: clip ? fs.existsSync(clip.video_path) : false, fileSize: clip && fs.existsSync(clip.video_path) ? fs.statSync(clip.video_path).size : 0 }, 'ZIP-H1');
-            // #endregion
             if (clip && fs.existsSync(clip.video_path)) {
                 clipPaths.push(clip.video_path);
                 if (!jobId) jobId = clip.job_id;
             }
         }
 
-        // #region agent log
-        _dbglog('clips.ts:zip-paths', 'Clip paths resolved', { clipPathCount: clipPaths.length, clipPaths, jobId }, 'ZIP-H1');
-        // #endregion
+
 
         if (clipPaths.length === 0) {
             return res.status(404).json({
@@ -856,16 +858,12 @@ router.post('/download-zip', async (req: Request, res: Response) => {
         const zipStream = zipExporter.createZipStream(clipPaths);
 
         zipStream.on('end', () => {
-            // #region agent log
-            _dbglog('clips.ts:zip-end', 'ZIP stream ended successfully', { clipPathCount: clipPaths.length }, 'ZIP-H2');
-            // #endregion
+
             console.log('📦 ZIP stream completed successfully');
         });
 
         zipStream.on('error', (err: Error) => {
-            // #region agent log
-            _dbglog('clips.ts:zip-error', 'ZIP stream ERROR', { error: err.message, stack: err.stack }, 'ZIP-H2');
-            // #endregion
+
             console.error('ZIP stream error:', err);
             if (!res.headersSent) {
                 res.status(500).json({
@@ -875,18 +873,10 @@ router.post('/download-zip', async (req: Request, res: Response) => {
             }
         });
 
-        res.on('close', () => {
-            // #region agent log
-            _dbglog('clips.ts:res-close', 'Response closed', { headersSent: res.headersSent, writableEnded: res.writableEnded, statusCode: res.statusCode }, 'ZIP-H3');
-            // #endregion
-        });
-
         zipStream.pipe(res);
 
     } catch (error: any) {
-        // #region agent log
-        _dbglog('clips.ts:zip-catch', 'ZIP endpoint CATCH error', { error: error.message, stack: error.stack }, 'ZIP-H2');
-        // #endregion
+
         console.error('ZIP download error:', error);
         res.status(500).json({
             success: false,

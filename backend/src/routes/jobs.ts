@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import fs from 'fs';
 import path from 'path';
-import { jobQueue } from '../services/queue';
+import { getVideoJob, getAllVideoJobs, removeJob, readJobProgress } from '../services/queue';
 import { queries } from '../services/database';
 
 const router = Router();
@@ -10,10 +10,10 @@ const router = Router();
  * GET /api/jobs/:jobId
  * Get job status and details
  */
-router.get('/:jobId', (req: Request, res: Response) => {
+router.get('/:jobId', async (req: Request, res: Response) => {
     const { jobId } = req.params;
 
-    const job = jobQueue.getJob(jobId);
+    const job = await getVideoJob(jobId);
 
     if (!job) {
         return res.status(404).json({
@@ -22,7 +22,22 @@ router.get('/:jobId', (req: Request, res: Response) => {
         });
     }
 
-    res.json(job);
+    const state = await job.getState();
+    // Normalize progress so `progress` is always a number (legacy contract)
+    // and the rich shape is exposed as `progressDetail`.
+    const progress = readJobProgress(job.progress);
+
+    res.json({
+        id: job.id,
+        status: state === 'waiting' ? 'pending' : state,
+        progress: progress.percent,
+        progressDetail: progress,
+        videoPath: job.data.videoPath,
+        result: job.returnvalue,
+        error: job.failedReason,
+        createdAt: new Date(job.timestamp),
+        updatedAt: new Date(job.processedOn || job.timestamp),
+    });
 });
 
 /**
@@ -35,7 +50,6 @@ router.get('/:jobId/clips', (req: Request, res: Response) => {
     const clipDir = path.resolve('./storage/clips');
 
     try {
-        // Check if clip directory exists
         if (!fs.existsSync(clipDir)) {
             return res.json({
                 success: true,
@@ -45,18 +59,15 @@ router.get('/:jobId/clips', (req: Request, res: Response) => {
             });
         }
 
-        // Find all clips for this job
         const allFiles = fs.readdirSync(clipDir);
         const clipFiles = allFiles.filter((file: string) =>
             file.startsWith(`clip_${jobId}_`) && file.endsWith('.mp4')
         );
 
-        // Parse clip info
         const clips = clipFiles.map((file: string, index: number) => {
             const clipPath = path.join(clipDir, file);
             const stats = fs.statSync(clipPath);
 
-            // Extract clip index from filename
             const match = file.match(/clip_.*_(\d+)\.mp4$/);
             const clipIndex = match ? parseInt(match[1]) : index;
 
@@ -126,41 +137,29 @@ router.delete('/:jobId/cleanup', async (req: Request, res: Response) => {
     try {
         const storageDir = path.resolve('./storage');
 
-        // 1. Get all clips from DB so we can delete their specific files
         const clips = await queries.getClipsByJob(jobId);
         for (const clip of clips) {
             if (clip.video_path) tryDelete(clip.video_path);
-            // Also delete _final variant if it exists
             const ext = path.extname(clip.video_path);
             const base = clip.video_path.replace(ext, '');
             tryDelete(`${base}_final${ext}`);
-            // Delete subtitle style file
             tryDelete(path.join(storageDir, 'subtitle-styles', `${clip.id}.json`));
         }
 
-        // 2. Delete original video
         tryDelete(path.join(storageDir, 'videos', `${jobId}.mp4`));
         tryDelete(path.join(storageDir, 'youtube', `${jobId}.mp4`));
-
-        // 3. Delete audio
         tryDelete(path.join(storageDir, 'audio', `${jobId}.mp3`));
-
-        // 4. Delete transcript
         tryDelete(path.join(storageDir, 'transcripts', `${jobId}.json`));
 
-        // 5. Delete any remaining clip files matching this jobId
         tryDeleteDir(path.join(storageDir, 'clips'), new RegExp(`clip_${jobId}_`));
         tryDeleteDir(path.join(storageDir, 'final'), new RegExp(jobId));
-
-        // 6. Delete subtitles (pattern: {jobId}_{clipIndex}_{lang}.json)
         tryDeleteDir(path.join(storageDir, 'subtitles'), new RegExp(`^${jobId}_`));
 
-        // 7. Delete from database
         await queries.deleteClipsByJob(jobId);
         await queries.deleteJob(jobId);
 
-        // 8. Remove from in-memory queue
-        jobQueue.removeJob(jobId);
+        // Remove from BullMQ queue and release concurrent slot
+        await removeJob(jobId);
 
         console.log(`   Deleted ${deletedFiles.length} files`);
         if (errors.length > 0) console.warn(`   ${errors.length} errors:`, errors);
@@ -185,12 +184,22 @@ router.delete('/:jobId/cleanup', async (req: Request, res: Response) => {
  * GET /api/jobs
  * Get all jobs (for debugging)
  */
-router.get('/', (req: Request, res: Response) => {
-    const jobs = jobQueue.getAllJobs();
+router.get('/', async (req: Request, res: Response) => {
+    const jobs = await getAllVideoJobs();
+    const allJobs = [
+        ...jobs.waiting,
+        ...jobs.active,
+        ...jobs.completed,
+        ...jobs.failed,
+    ];
     res.json({
         success: true,
-        count: jobs.length,
-        jobs,
+        count: allJobs.length,
+        jobs: allJobs.map(j => ({
+            id: j.id,
+            status: j.finishedOn ? (j.failedReason ? 'failed' : 'completed') : 'pending',
+            data: j.data,
+        })),
     });
 });
 

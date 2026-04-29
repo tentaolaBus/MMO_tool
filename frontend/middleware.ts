@@ -1,8 +1,28 @@
-import { type NextRequest } from 'next/server';
-import { updateSession } from '@/lib/supabase/middleware';
+import { type NextRequest, NextResponse } from 'next/server';
 
+/**
+ * Middleware for the frontend application.
+ *
+ * Tool routes (/ai_clipping, /reframe, /subtitles) are public — no auth required.
+ * Other routes pass through Supabase session management.
+ */
 export async function middleware(request: NextRequest) {
-    return await updateSession(request);
+    const { pathname } = request.nextUrl;
+
+    // Public tool routes — bypass auth entirely
+    const publicToolRoutes = ['/ai_clipping', '/reframe', '/subtitles'];
+    if (publicToolRoutes.some(route => pathname.startsWith(route))) {
+        return NextResponse.next();
+    }
+
+    // For all other routes, try Supabase session (but don't crash if it fails)
+    try {
+        const { updateSession } = await import('@/lib/supabase/middleware');
+        return await updateSession(request);
+    } catch {
+        // If Supabase middleware fails, just pass through
+        return NextResponse.next();
+    }
 }
 
 export const config = {

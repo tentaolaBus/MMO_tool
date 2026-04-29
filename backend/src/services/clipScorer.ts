@@ -2,7 +2,7 @@ import { TranscriptSegment } from '../models/job';
 import { ClipScore } from '../models/clip';
 
 /**
- * High-value keywords for clip scoring
+ * High-value keywords for clip scoring (legacy fallback)
  * These words indicate potentially viral or engaging content
  */
 const VIRAL_KEYWORDS = [
@@ -19,11 +19,15 @@ const VIRAL_KEYWORDS = [
 ];
 
 /**
- * ClipScorer - Scores clip candidates based on multiple factors
+ * ClipScorer - Scores clip candidates based on multiple factors.
+ *
+ * Supports two modes:
+ *   1. Legacy: text-only scoring (durationScore + keywordScore + completenessScore)
+ *   2. Multimodal: accepts pre-computed scores from the AI highlight service
  */
 export class ClipScorer {
     /**
-     * Score a clip candidate
+     * Score a clip candidate (legacy text-only mode)
      */
     scoreClip(
         segments: TranscriptSegment[],
@@ -56,9 +60,53 @@ export class ClipScorer {
     }
 
     /**
+     * Build a ClipScore from AI highlight analysis response.
+     * Maps the multimodal scores into the ClipScore interface.
+     */
+    fromAIHighlight(highlight: {
+        score: number;
+        viral_score: number;
+        confidence: number;
+        breakdown: Record<string, number>;
+        keywords: string[];
+    }): ClipScore {
+        // Map AI features to legacy score categories for backward compatibility
+        const b = highlight.breakdown || {};
+
+        // Duration score: use the raw score proportion (0-40 range)
+        const durationScore = Math.round((1 - Math.abs((b.rate_change || 0.5) - 0.5) * 2) * 40);
+
+        // Keyword score: from keyword_score feature (0-30 range)
+        const keywordScore = Math.round((b.keyword_score || 0) * 30);
+
+        // Completeness score: from hook_score + sentiment_var (0-30 range)
+        const completenessScore = Math.round(
+            ((b.hook_score || 0) * 0.5 + (b.sentiment_var || 0) * 0.5) * 30
+        );
+
+        return {
+            total: highlight.score,
+            durationScore,
+            keywordScore,
+            completenessScore,
+            keywords: highlight.keywords || [],
+
+            // Extended multimodal fields
+            viralScore: highlight.viral_score,
+            confidence: highlight.confidence,
+            audioScore: (b.audio_energy || 0) * 0.4 + (b.speech_emotion || 0) * 0.3 +
+                        (b.laughter || 0) * 0.3,
+            visualScore: (b.motion || 0) * 0.4 + (b.clip_visual || 0) * 0.4 +
+                         (b.scene_changes || 0) * 0.2,
+            sentimentScore: b.sentiment_var || 0,
+            hookScore: b.hook_score || 0,
+            breakdown: b,
+        };
+    }
+
+    /**
      * Duration Score (0-40 points)
      * Ideal: 30-45 seconds
-     * Formula: 40 - abs(duration - 37.5) * 2
      */
     private calculateDurationScore(duration: number): number {
         const ideal = 37.5; // midpoint of 30-45
@@ -75,24 +123,18 @@ export class ClipScorer {
         const lowerText = text.toLowerCase();
         const matchedKeywords: string[] = [];
 
-        // Find all matching keywords
         for (const keyword of VIRAL_KEYWORDS) {
             if (lowerText.includes(keyword)) {
                 matchedKeywords.push(keyword);
             }
         }
 
-        // Calculate score (6 points per keyword, max 30)
         const keywordScore = Math.min(matchedKeywords.length * 6, 30);
-
         return { keywordScore, keywords: matchedKeywords };
     }
 
     /**
      * Completeness Score (0-30 points)
-     * - Starts after pause: +10
-     * - Ends at pause: +10
-     * - Contains complete sentences: +10
      */
     private calculateCompletenessScore(
         segments: TranscriptSegment[],
@@ -101,11 +143,9 @@ export class ClipScorer {
     ): number {
         let score = 0;
 
-        // Bonus for natural boundaries (pauses)
         if (startsAfterPause) score += 10;
         if (endsAtPause) score += 10;
 
-        // Check for sentence completeness
         const text = segments.map(s => s.text).join(' ');
         const hasSentenceEnding = /[.!?]$/.test(text.trim());
 

@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import VideoPlayer from '../../../../components/VideoPlayer';
 import ClipList from '../../../../components/ClipList';
 import ClipPreviewModal from '../../../../components/ClipPreviewModal';
-import { getJobStatus, getClips, renderClips, updateClipSelection, downloadSelectedClips, cleanupJob, pollJobStatus } from '../../../../lib/api';
+import { getJobStatus, getClips, renderClips, updateClipSelection, downloadSelectedClips, cleanupJob, pollJobStatus, subscribeToProgress, extractAxiosError } from '../../../../lib/api';
 import { Clip } from '../../../../lib/types';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3001';
@@ -23,6 +23,7 @@ export default function ClipsPage() {
     const [rendering, setRendering] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [downloading, setDownloading] = useState(false);
+    const [renderProgress, setRenderProgress] = useState<{ percent: number; stage: string; message: string } | null>(null);
 
     // Stable fetch function that can be called from effects and event handlers
     const loadJobAndClips = useCallback(async () => {
@@ -96,14 +97,15 @@ export default function ClipsPage() {
     const handleRenderClips = async () => {
         try {
             setRendering(true);
+            setRenderProgress({ percent: 0, stage: 'starting', message: 'Starting clip generation...' });
             console.log('Rendering clips for job:', jobId);
 
-            const renderResult = await renderClips(jobId, 10);
+            const renderResult = await renderClips(jobId, 10, (status, pct) => {
+                setRenderProgress({ percent: pct, stage: status, message: `Processing... ${pct}%` });
+            });
 
             if (renderResult.success && renderResult.clips) {
                 setClips(renderResult.clips);
-                // Clips are already saved to database during render
-                // Initialize UI selection state from the returned clips
                 const selectedIds = new Set(
                     renderResult.clips
                         .filter((c: any) => c.selected)
@@ -113,12 +115,15 @@ export default function ClipsPage() {
 
                 setLoading(false);
                 setRendering(false);
+                setRenderProgress(null);
             }
         } catch (err: any) {
             console.error('Failed to render clips:', err);
+            // Show the detailed error message which now includes stage/hint from extractAxiosError
             setError(err.message || 'Failed to render clips');
             setLoading(false);
             setRendering(false);
+            setRenderProgress(null);
         }
     };
 
@@ -225,18 +230,30 @@ export default function ClipsPage() {
 
     if (loading || rendering) {
         const statusText = rendering
-            ? 'Generating clips...'
+            ? renderProgress?.message || 'Generating clips...'
             : job?.status === 'processing'
                 ? `Transcribing video... ${job?.progress || 0}%`
                 : job?.status === 'pending'
                     ? 'Waiting for processing to start...'
                     : 'Loading...';
 
+        const progressPercent = rendering
+            ? renderProgress?.percent || 0
+            : job?.progress || 0;
+
         return (
             <div className="flex items-center justify-center min-h-screen">
-                <div className="text-center">
+                <div className="text-center w-full max-w-md px-4">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-                    <p className="text-gray-600">{statusText}</p>
+                    <p className="text-gray-600 mb-4">{statusText}</p>
+                    {progressPercent > 0 && (
+                        <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                            <div
+                                className="bg-gradient-to-r from-blue-500 to-blue-600 h-3 rounded-full transition-all duration-700 ease-out"
+                                style={{ width: `${progressPercent}%` }}
+                            />
+                        </div>
+                    )}
                 </div>
             </div>
         );

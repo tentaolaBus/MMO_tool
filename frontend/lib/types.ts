@@ -52,7 +52,7 @@ export interface SubtitleStyle {
     textColor: string;
     backgroundColor: string;
     backgroundOpacity: number;
-    position: 'bottom' | 'middle';
+    position: 'top' | 'bottom' | 'middle';
     textShadow: boolean;
     borderRadius: number;
     padding: number;

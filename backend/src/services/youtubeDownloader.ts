@@ -74,16 +74,33 @@ class YouTubeDownloaderService {
      * Download video from YouTube
      * @param youtubeUrl - YouTube video URL
      * @param jobId - Job ID for filename
+     * @param maxDurationSec - Maximum allowed duration (0 = no limit)
      * @returns Path to downloaded video file
      */
-    async downloadVideo(youtubeUrl: string, jobId: string): Promise<string> {
+    async downloadVideo(youtubeUrl: string, jobId: string, maxDurationSec: number = 0): Promise<string> {
         if (!this.validateYoutubeUrl(youtubeUrl)) {
             throw new Error('Invalid YouTube URL');
         }
 
+        // Duration check — get info first if we have a limit
+        if (maxDurationSec > 0) {
+            try {
+                const info = await this.getVideoInfo(youtubeUrl);
+                if (info.duration > maxDurationSec) {
+                    const maxMin = Math.round(maxDurationSec / 60);
+                    const vidMin = Math.round(info.duration / 60);
+                    throw new Error(`Video too long (${vidMin} min). Maximum allowed: ${maxMin} min.`);
+                }
+                console.log(`   [PIPELINE] YouTube video validated: "${info.title}" (${info.duration}s)`);
+            } catch (e: any) {
+                if (e.message.includes('too long')) throw e;
+                console.warn(`   [PIPELINE] ⚠️ Could not validate duration: ${e.message}`);
+            }
+        }
+
         const outputPath = path.join(this.downloadDir, `${jobId}.mp4`);
 
-        console.log(`📥 Downloading YouTube video to: ${outputPath}`);
+        console.log(`   [PIPELINE] 📥 Downloading YouTube video to: ${outputPath}`);
 
         // ── Format fallback chain ────────────────────────────────────────
         // Strategy 1: Best mp4 video + m4a audio merged to mp4 (ideal)

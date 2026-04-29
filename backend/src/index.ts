@@ -3,24 +3,28 @@ import cors from 'cors';
 import path from 'path';
 import dotenv from 'dotenv';
 
-// Load environment variables FIRST
 dotenv.config();
 
 import { config } from './config';
 import uploadRoutes from './routes/upload';
 import jobsRoutes from './routes/jobs';
 import clipsRoutes from './routes/clips';
+import progressRoutes from './routes/progress';
 import subtitlesRoutes from './routes/subtitles';
 import authRoutes from './routes/auth';
+import reframeRoutes from './routes/reframe';
+import subtitleStandaloneRoutes from './routes/subtitle-standalone';
 import { jobProcessor } from './services/processor';
+import { videoQueue } from './services/queue';
+import { reframeQueue, reframeProcessor } from './services/reframeQueue';
+import { subtitleQueue, subtitleProcessor } from './services/subtitleQueue';
+import { cleanupService } from './services/cleanupService';
 import { closeDatabase } from './services/database';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
-// Import database service - Supabase connection is established on import
 import './services/database';
 
 const app = express();
 
-// CORS configuration — restrict origins in production
 const allowedOrigins = [
     process.env.FRONTEND_URL,
     'http://localhost:3000',
@@ -28,7 +32,6 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: (origin, callback) => {
-        // Allow requests with no origin (mobile apps, curl, server-to-server)
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
@@ -40,54 +43,43 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Serve storage files (videos, clips, transcripts)
-// For /storage/final/ — disable browser caching so re-rendered videos always load fresh
 app.use('/storage/final', express.static(
     path.join(__dirname, '../storage/final'),
     { setHeaders: (res) => res.setHeader('Cache-Control', 'no-store, must-revalidate') }
 ));
-// For everything else under /storage/
 app.use('/storage', express.static(path.join(__dirname, '../storage')));
 
-// API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/jobs', jobsRoutes);
+app.use('/api/jobs', progressRoutes);
 app.use('/api/clips', clipsRoutes);
 app.use('/api/clips', subtitlesRoutes);
+app.use('/api/reframe', reframeRoutes);
+app.use('/api/subtitles', subtitleStandaloneRoutes);
 
-// Health check
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', codeVersion: 'FIX_2026_02_20_V3', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', codeVersion: 'PIPELINE_FIX_2026_04_14', timestamp: new Date().toISOString() });
 });
 
-// 404 handler (must be after all routes)
 app.use(notFoundHandler);
-
-// Global error handler (must be last)
 app.use(errorHandler);
 
-// Handle unhandled promise rejections
 process.on('unhandledRejection', (reason: any, promise) => {
     console.error('\n❌ === UNHANDLED PROMISE REJECTION ===');
     console.error('Reason:', reason);
     console.error('Promise:', promise);
     console.error('================\n');
-    // In production, you might want to shut down gracefully
 });
 
-// Handle uncaught exceptions
 process.on('uncaughtException', (error: Error) => {
     console.error('\n❌ === UNCAUGHT EXCEPTION ===');
     console.error('Error:', error.message);
     console.error('Stack:', error.stack);
     console.error('================\n');
-
-    // Shutdown gracefully
     process.exit(1);
 });
 
-// Start server
 const server = app.listen(config.port, "0.0.0.0", () => {
     console.log('\n🚀 ===================================');
     console.log('   MMO Video Tool - Backend Server');
@@ -98,12 +90,19 @@ const server = app.listen(config.port, "0.0.0.0", () => {
     console.log(`   ⏰ Started:     ${new Date().toLocaleTimeString()}`);
     console.log('   ===================================\n');
 
-    // Start job processor
     jobProcessor.start();
-    console.log('✅ Job processor started\n');
+    console.log('✅ Job processor started');
+
+    reframeProcessor.start();
+    console.log('✅ Reframe processor started');
+
+    subtitleProcessor.start();
+    console.log('✅ Subtitle processor started');
+
+    cleanupService.start();
+    console.log('');
 });
 
-// Handle server errors
 server.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code === 'EADDRINUSE') {
         console.error('\n❌ ERROR: Port already in use!');
@@ -125,15 +124,27 @@ server.on('error', (error: NodeJS.ErrnoException) => {
     }
 });
 
-// Graceful shutdown
-const shutdown = (signal: string) => {
+const shutdown = async (signal: string) => {
     console.log(`\n⚠️  Received ${signal}, shutting down gracefully...`);
 
-    server.close(() => {
+    server.close(async () => {
         console.log('✅ HTTP server closed');
 
-        jobProcessor.stop();
+        await jobProcessor.stop();
         console.log('✅ Job processor stopped');
+
+        await reframeProcessor.stop();
+        console.log('✅ Reframe processor stopped');
+
+        await subtitleProcessor.stop();
+        console.log('✅ Subtitle processor stopped');
+
+        cleanupService.stop();
+
+        await videoQueue.close();
+        await reframeQueue.close();
+        await subtitleQueue.close();
+        console.log('✅ Redis queues closed');
 
         closeDatabase();
         console.log('✅ Database connection closed');
@@ -142,7 +153,6 @@ const shutdown = (signal: string) => {
         process.exit(0);
     });
 
-    // Force shutdown after 10 seconds
     setTimeout(() => {
         console.error('⚠️  Forced shutdown after timeout');
         process.exit(1);

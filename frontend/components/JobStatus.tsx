@@ -85,18 +85,34 @@ export default function JobStatus({ jobId }: JobStatusProps) {
                     </span>
                 </div>
 
-                {job.status === 'processing' && (
-                    <div>
-                        <p className="text-sm text-gray-600 mb-2">Progress</p>
-                        <div className="w-full bg-gray-200 rounded-full h-4">
-                            <div
-                                className="bg-blue-600 h-4 rounded-full transition-all duration-300"
-                                style={{ width: `${job.progress}%` }}
-                            ></div>
+                {job.status === 'processing' && (() => {
+                    // Defensive parse: backend now sends `progress: number` and
+                    // optional `progressDetail: { percent, stage, message }`.
+                    // Older builds may still send the object on `progress` itself —
+                    // never let an object reach JSX (would throw "Objects are not valid as a React child").
+                    const raw: any = (job as any).progress;
+                    const detail: any = (job as any).progressDetail;
+                    const percent = typeof raw === 'number'
+                        ? raw
+                        : (raw && typeof raw === 'object' ? raw.percent : detail?.percent) ?? 0;
+                    const stage = detail?.stage ?? (raw && typeof raw === 'object' ? raw.stage : undefined);
+                    const message = detail?.message ?? (raw && typeof raw === 'object' ? raw.message : undefined);
+                    return (
+                        <div>
+                            <p className="text-sm text-gray-600 mb-2">Progress</p>
+                            <div className="w-full bg-gray-200 rounded-full h-4">
+                                <div
+                                    className="bg-blue-600 h-4 rounded-full transition-all duration-300"
+                                    style={{ width: `${percent}%` }}
+                                />
+                            </div>
+                            <p className="text-sm text-gray-600 mt-1">
+                                {percent}%{stage ? ` — ${stage}` : ''}
+                            </p>
+                            {message && <p className="text-xs text-gray-500 mt-0.5">{message}</p>}
                         </div>
-                        <p className="text-sm text-gray-600 mt-1">{job.progress}%</p>
-                    </div>
-                )}
+                    );
+                })()}
 
                 {job.error && (
                     <div className="p-3 bg-red-50 border border-red-200 rounded-md">

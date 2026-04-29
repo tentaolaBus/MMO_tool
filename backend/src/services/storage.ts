@@ -22,6 +22,7 @@ class StorageService {
             path.resolve(config.storageDir, 'videos'),
             path.resolve(config.storageDir, 'audio'),
             path.resolve(config.storageDir, 'transcripts'),
+            path.resolve(config.storageDir, 'reframed'),
         ];
 
         dirs.forEach(dir => {
@@ -57,6 +58,13 @@ class StorageService {
      */
     getTranscriptPath(jobId: string): string {
         return path.resolve(config.storageDir, 'transcripts', `${jobId}.json`);
+    }
+
+    /**
+     * Get full path for reframed video storage
+     */
+    getReframePath(jobId: string): string {
+        return path.resolve(config.storageDir, 'reframed', `reframed_${jobId}.mp4`);
     }
 
     /**
