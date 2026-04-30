@@ -1,14 +1,18 @@
 'use client';
 
-import { Crosshair, Hand, Download, RotateCcw, Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
-import type { OutputRatio, ReframeProgress } from '@/features/video-reframing/types';
+import { Download, RotateCcw, Loader2, CheckCircle2, AlertCircle, ScanFace, Radar, Hand } from 'lucide-react';
+import type { OutputRatio, ReframeProgress, AIMode, ZoomStyle } from '@/features/video-reframing/types';
 import { RATIO_OPTIONS } from '@/features/video-reframing/types';
 
 interface ReframeControlsProps {
     /** Selected output ratio */
     ratio: OutputRatio;
-    /** Whether auto-center is active */
-    autoCenter: boolean;
+    /** AI mode */
+    aiMode: AIMode;
+    /** Zoom style */
+    zoomStyle: ZoomStyle;
+    /** Focus subject */
+    focusSubjectId: 'auto' | string;
     /** Current status */
     status: 'idle' | 'uploading' | 'processing' | 'completed' | 'failed';
     /** Whether a file is selected */
@@ -21,7 +25,9 @@ interface ReframeControlsProps {
     downloadReady: boolean;
     /** Callbacks */
     onRatioChange: (ratio: OutputRatio) => void;
-    onToggleAutoCenter: () => void;
+    onAIModeChange: (mode: AIMode) => void;
+    onZoomStyleChange: (style: ZoomStyle) => void;
+    onFocusSubjectChange: (id: 'auto' | string) => void;
     onProcess: () => void;
     onDownload: () => void;
     onReset: () => void;
@@ -29,14 +35,18 @@ interface ReframeControlsProps {
 
 export default function ReframeControls({
     ratio,
-    autoCenter,
+    aiMode,
+    zoomStyle,
+    focusSubjectId,
     status,
     hasFile,
     progress,
     error,
     downloadReady,
     onRatioChange,
-    onToggleAutoCenter,
+    onAIModeChange,
+    onZoomStyleChange,
+    onFocusSubjectChange,
     onProcess,
     onDownload,
     onReset,
@@ -45,6 +55,80 @@ export default function ReframeControls({
 
     return (
         <div className="space-y-5">
+            {/* ─── AI Mode ─── */}
+            <div>
+                <label className="block text-sm font-semibold text-foreground mb-2.5">
+                    AI Mode
+                </label>
+                <div className="grid grid-cols-1 gap-2">
+                    <button
+                        type="button"
+                        disabled={isProcessing}
+                        onClick={() => onAIModeChange('tracking')}
+                        className={`
+                            flex items-center gap-3 p-3 rounded-xl border-2 transition-all duration-200 text-left
+                            disabled:opacity-50 disabled:cursor-not-allowed
+                            ${aiMode === 'tracking'
+                                ? 'border-purple-500 bg-purple-500/10'
+                                : 'border-border hover:border-purple-400/40 hover:bg-muted/40'}
+                        `}
+                    >
+                        <div className={`size-8 rounded-lg flex items-center justify-center ${aiMode === 'tracking' ? 'bg-purple-500/15 text-purple-500' : 'bg-muted text-muted-foreground'}`}>
+                            <Radar className="size-4" />
+                        </div>
+                        <div className="flex-1">
+                            <div className="text-sm font-semibold text-foreground">AI Tracking</div>
+                            <div className="text-[11px] text-muted-foreground">Recommended — smooth subject tracking</div>
+                        </div>
+                        {aiMode === 'tracking' && <span className="text-[11px] font-bold text-purple-500">ON</span>}
+                    </button>
+
+                    <button
+                        type="button"
+                        disabled={isProcessing}
+                        onClick={() => onAIModeChange('face')}
+                        className={`
+                            flex items-center gap-3 p-3 rounded-xl border-2 transition-all duration-200 text-left
+                            disabled:opacity-50 disabled:cursor-not-allowed
+                            ${aiMode === 'face'
+                                ? 'border-purple-500 bg-purple-500/10'
+                                : 'border-border hover:border-purple-400/40 hover:bg-muted/40'}
+                        `}
+                    >
+                        <div className={`size-8 rounded-lg flex items-center justify-center ${aiMode === 'face' ? 'bg-purple-500/15 text-purple-500' : 'bg-muted text-muted-foreground'}`}>
+                            <ScanFace className="size-4" />
+                        </div>
+                        <div className="flex-1">
+                            <div className="text-sm font-semibold text-foreground">Face Focus</div>
+                            <div className="text-[11px] text-muted-foreground">Prefer faces when available</div>
+                        </div>
+                        {aiMode === 'face' && <span className="text-[11px] font-bold text-purple-500">ON</span>}
+                    </button>
+
+                    <button
+                        type="button"
+                        disabled={isProcessing}
+                        onClick={() => onAIModeChange('manual')}
+                        className={`
+                            flex items-center gap-3 p-3 rounded-xl border-2 transition-all duration-200 text-left
+                            disabled:opacity-50 disabled:cursor-not-allowed
+                            ${aiMode === 'manual'
+                                ? 'border-purple-500 bg-purple-500/10'
+                                : 'border-border hover:border-purple-400/40 hover:bg-muted/40'}
+                        `}
+                    >
+                        <div className={`size-8 rounded-lg flex items-center justify-center ${aiMode === 'manual' ? 'bg-purple-500/15 text-purple-500' : 'bg-muted text-muted-foreground'}`}>
+                            <Hand className="size-4" />
+                        </div>
+                        <div className="flex-1">
+                            <div className="text-sm font-semibold text-foreground">Manual Adjust</div>
+                            <div className="text-[11px] text-muted-foreground">You control the crop position</div>
+                        </div>
+                        {aiMode === 'manual' && <span className="text-[11px] font-bold text-purple-500">ON</span>}
+                    </button>
+                </div>
+            </div>
+
             {/* ─── Ratio Selector ─── */}
             <div>
                 <label className="block text-sm font-semibold text-foreground mb-2.5">
@@ -90,64 +174,46 @@ export default function ReframeControls({
                 </div>
             </div>
 
-            {/* ─── Crop Mode Toggle ─── */}
-            <div>
-                <label className="block text-sm font-semibold text-foreground mb-2.5">
-                    Crop Mode
-                </label>
-                <div className="flex gap-2">
-                    <button
-                        onClick={() => { if (!autoCenter) onToggleAutoCenter(); }}
+            {/* ─── Zoom Style ─── */}
+            <div className="grid grid-cols-2 gap-3">
+                <div>
+                    <label className="block text-sm font-semibold text-foreground mb-2.5">
+                        Zoom Style
+                    </label>
+                    <select
+                        value={zoomStyle}
                         disabled={isProcessing}
-                        className={`
-                            flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border-2 text-sm font-medium
-                            transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed
-                            ${autoCenter
-                                ? 'border-purple-500 bg-purple-500/10 text-purple-500'
-                                : 'border-border text-muted-foreground hover:border-purple-400/40'
-                            }
-                        `}
+                        onChange={(e) => onZoomStyleChange(e.target.value as ZoomStyle)}
+                        className="w-full px-3 py-2.5 rounded-xl border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500/40"
                     >
-                        <Crosshair className="size-4" />
-                        Auto Center
-                    </button>
-                    <button
-                        onClick={() => { if (autoCenter) onToggleAutoCenter(); }}
+                        <option value="smooth">Smooth tracking</option>
+                        <option value="dynamic">Dynamic zoom</option>
+                    </select>
+                </div>
+                <div>
+                    <label className="block text-sm font-semibold text-foreground mb-2.5">
+                        Focus
+                    </label>
+                    <select
+                        value={focusSubjectId}
                         disabled={isProcessing}
-                        className={`
-                            flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl border-2 text-sm font-medium
-                            transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed
-                            ${!autoCenter
-                                ? 'border-purple-500 bg-purple-500/10 text-purple-500'
-                                : 'border-border text-muted-foreground hover:border-purple-400/40'
-                            }
-                        `}
+                        onChange={(e) => onFocusSubjectChange(e.target.value as any)}
+                        className="w-full px-3 py-2.5 rounded-xl border border-border bg-background text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-purple-500/40"
                     >
-                        <Hand className="size-4" />
-                        Manual Adjust
-                    </button>
+                        <option value="auto">Auto</option>
+                        {/* If backend later exposes subjects, we can render them here */}
+                    </select>
                 </div>
             </div>
 
-            {/* ─── Progress Bar ─── */}
+            {/* Small inline status (main progress is in bottom panel) */}
             {progress && isProcessing && (
-                <div className="space-y-2 p-4 rounded-xl bg-muted/50 border border-border">
-                    <div className="flex items-center justify-between text-sm">
-                        <span className="text-purple-500 flex items-center gap-2">
-                            <Loader2 className="size-4 animate-spin" />
-                            {progress.message}
-                        </span>
-                        <span className="font-bold text-purple-400">{progress.percent}%</span>
-                    </div>
-                    <div className="w-full bg-muted rounded-full h-2.5 overflow-hidden">
-                        <div
-                            className="h-2.5 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 transition-all duration-700 ease-out"
-                            style={{ width: `${progress.percent}%` }}
-                        />
-                    </div>
-                    <p className="text-[11px] text-muted-foreground capitalize">
-                        Stage: {progress.stage.replace(/_/g, ' ')}
-                    </p>
+                <div className="flex items-center justify-between text-xs text-muted-foreground bg-muted/40 border border-border rounded-xl px-3 py-2">
+                    <span className="flex items-center gap-2">
+                        <Loader2 className="size-3.5 animate-spin text-purple-500" />
+                        {progress.message}
+                    </span>
+                    <span className="font-bold text-purple-400">{progress.percent}%</span>
                 </div>
             )}
 

@@ -9,7 +9,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { reframeService } from '../services/reframeService';
-import type { ReframeSettings, VideoMeta, ReframeProgress, OutputRatio } from '../types';
+import type { ReframeSettings, VideoMeta, ReframeProgress, OutputRatio, AIMode, ZoomStyle } from '../types';
 
 export interface ReframeState {
     /** Currently selected file */
@@ -30,6 +30,8 @@ export interface ReframeState {
     error: string | null;
     /** Whether download is available */
     downloadReady: boolean;
+    /** Stage log (most recent first) */
+    stageLogs: Array<{ t: number; stage: string; message: string; percent: number }>;
 }
 
 export function useReframeProcessing() {
@@ -40,12 +42,16 @@ export function useReframeProcessing() {
         ratio: '9:16',
         cropX: 0.5,
         autoCenter: true,
+        aiMode: 'tracking',
+        zoomStyle: 'smooth',
+        focusSubjectId: 'auto',
     });
     const [jobId, setJobId] = useState<string | null>(null);
     const [progress, setProgress] = useState<ReframeProgress | null>(null);
     const [status, setStatus] = useState<'idle' | 'uploading' | 'processing' | 'completed' | 'failed'>('idle');
     const [error, setError] = useState<string | null>(null);
     const [downloadReady, setDownloadReady] = useState(false);
+    const [stageLogs, setStageLogs] = useState<Array<{ t: number; stage: string; message: string; percent: number }>>([]);
 
     const mountedRef = useRef(true);
     const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -78,6 +84,7 @@ export function useReframeProcessing() {
         setProgress(null);
         setJobId(null);
         setDownloadReady(false);
+        setStageLogs([]);
     }, [previewUrl]);
 
     /** Update a single setting */
@@ -93,13 +100,25 @@ export function useReframeProcessing() {
         setSettings(prev => ({ ...prev, ratio }));
     }, []);
 
-    /** Toggle auto center */
-    const toggleAutoCenter = useCallback(() => {
+    /** Set AI mode (tracking/face/manual) */
+    const setAIMode = useCallback((aiMode: AIMode) => {
         setSettings(prev => ({
             ...prev,
-            autoCenter: !prev.autoCenter,
-            cropX: !prev.autoCenter ? 0.5 : prev.cropX,
+            aiMode,
+            // Keep legacy transport field consistent: manual => autoCenter=false
+            autoCenter: aiMode !== 'manual',
+            cropX: aiMode === 'manual' ? prev.cropX : 0.5,
         }));
+    }, []);
+
+    /** Set zoom style */
+    const setZoomStyle = useCallback((zoomStyle: ZoomStyle) => {
+        setSettings(prev => ({ ...prev, zoomStyle }));
+    }, []);
+
+    /** Set focus subject */
+    const setFocusSubject = useCallback((focusSubjectId: 'auto' | string) => {
+        setSettings(prev => ({ ...prev, focusSubjectId }));
     }, []);
 
     /** Set manual crop X position */
@@ -108,6 +127,7 @@ export function useReframeProcessing() {
             ...prev,
             cropX: Math.max(0, Math.min(1, cropX)),
             autoCenter: false,
+            aiMode: 'manual',
         }));
     }, []);
 
@@ -123,6 +143,7 @@ export function useReframeProcessing() {
             setStatus('uploading');
             setError(null);
             setProgress({ percent: 0, stage: 'uploading', message: 'Uploading video...' });
+            setStageLogs([{ t: Date.now(), stage: 'uploading', message: 'Uploading video…', percent: 0 }]);
 
             const result = await reframeService.upload(file, settings, (uploadPercent) => {
                 if (!mountedRef.current) return;
@@ -151,6 +172,10 @@ export function useReframeProcessing() {
             setJobId(newJobId);
             setStatus('processing');
             setProgress({ percent: 10, stage: 'processing', message: 'Processing video...' });
+            setStageLogs((prev) => [
+                { t: Date.now(), stage: 'queued', message: 'Queued for processing…', percent: 10 },
+                ...prev,
+            ].slice(0, 12));
 
             // Subscribe to SSE progress
             const unsubscribe = reframeService.subscribeToProgress(
@@ -159,6 +184,14 @@ export function useReframeProcessing() {
                     if (!mountedRef.current) return;
 
                     setProgress(data);
+                    setStageLogs((prev) => {
+                        const last = prev[0]?.stage;
+                        if (last === data.stage) return prev;
+                        return [
+                            { t: Date.now(), stage: data.stage, message: data.message || data.stage, percent: data.percent },
+                            ...prev,
+                        ].slice(0, 12);
+                    });
 
                     if (data.stage === 'completed') {
                         setStatus('completed');
@@ -200,6 +233,19 @@ export function useReframeProcessing() {
                 if (!mountedRef.current) return;
 
                 setProgress(statusResult.progress);
+                setStageLogs((prev) => {
+                    const last = prev[0]?.stage;
+                    if (last === statusResult.progress.stage) return prev;
+                    return [
+                        {
+                            t: Date.now(),
+                            stage: statusResult.progress.stage,
+                            message: statusResult.progress.message || statusResult.progress.stage,
+                            percent: statusResult.progress.percent,
+                        },
+                        ...prev,
+                    ].slice(0, 12);
+                });
 
                 if (statusResult.progress.stage === 'completed' || statusResult.hasOutput) {
                     setStatus('completed');
@@ -248,12 +294,20 @@ export function useReframeProcessing() {
         setFile(null);
         setPreviewUrl(null);
         setMeta(null);
-        setSettings({ ratio: '9:16', cropX: 0.5, autoCenter: true });
+        setSettings({
+            ratio: '9:16',
+            cropX: 0.5,
+            autoCenter: true,
+            aiMode: 'tracking',
+            zoomStyle: 'smooth',
+            focusSubjectId: 'auto',
+        });
         setJobId(null);
         setProgress(null);
         setStatus('idle');
         setError(null);
         setDownloadReady(false);
+        setStageLogs([]);
     }, [previewUrl]);
 
     return {
@@ -267,12 +321,15 @@ export function useReframeProcessing() {
         status,
         error,
         downloadReady,
+        stageLogs,
 
         // Actions
         selectFile,
         updateSetting,
         setRatio,
-        toggleAutoCenter,
+        setAIMode,
+        setZoomStyle,
+        setFocusSubject,
         setCropX,
         uploadAndProcess,
         download,

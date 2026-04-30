@@ -26,6 +26,7 @@ class StorageService {
             path_1.default.resolve(config_1.config.storageDir, 'videos'),
             path_1.default.resolve(config_1.config.storageDir, 'audio'),
             path_1.default.resolve(config_1.config.storageDir, 'transcripts'),
+            path_1.default.resolve(config_1.config.storageDir, 'reframed'),
         ];
         dirs.forEach(dir => {
             if (!fs_1.default.existsSync(dir)) {
@@ -56,6 +57,12 @@ class StorageService {
      */
     getTranscriptPath(jobId) {
         return path_1.default.resolve(config_1.config.storageDir, 'transcripts', `${jobId}.json`);
+    }
+    /**
+     * Get full path for reframed video storage
+     */
+    getReframePath(jobId) {
+        return path_1.default.resolve(config_1.config.storageDir, 'reframed', `reframed_${jobId}.mp4`);
     }
     /**
      * Check if file exists

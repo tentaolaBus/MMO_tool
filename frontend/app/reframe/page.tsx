@@ -3,8 +3,9 @@
 import { useReframeProcessing } from '@/features/video-reframing';
 import ReframeUpload from '@/components/reframe/ReframeUpload';
 import CropAdjuster from '@/components/reframe/CropAdjuster';
-import ReframePreview from '@/components/reframe/ReframePreview';
 import ReframeControls from '@/components/reframe/ReframeControls';
+import VideoPreviewWithOverlay from '@/components/VideoPreviewWithOverlay';
+import ReframeProgress from '@/components/ReframeProgress';
 import { ArrowLeft, Smartphone, Monitor } from 'lucide-react';
 import Link from 'next/link';
 
@@ -20,11 +21,15 @@ export default function ReframePage() {
         downloadReady,
         selectFile,
         setRatio,
-        toggleAutoCenter,
+        setAIMode,
+        setZoomStyle,
+        setFocusSubject,
         setCropX,
         uploadAndProcess,
         download,
         reset,
+        jobId,
+        stageLogs,
     } = useReframeProcessing();
 
     const isProcessing = status === 'uploading' || status === 'processing';
@@ -61,35 +66,33 @@ export default function ReframePage() {
                 </div>
 
                 {/* ─── Main Content ─── */}
-                <div className="grid lg:grid-cols-[1fr_340px] gap-6">
-                    {/* ─── Left Column: Upload + Preview ─── */}
-                    <div className="space-y-6">
-                        {/* Upload Zone */}
-                        {!file && (
-                            <div className="bg-card rounded-2xl border border-border p-6 shadow-sm">
-                                <ReframeUpload
-                                    onFileSelect={selectFile}
-                                    file={file}
-                                    disabled={isProcessing}
-                                />
-                            </div>
-                        )}
+                {/* ─── Upload (first step) ─── */}
+                {!file && (
+                    <div className="bg-card rounded-2xl border border-border p-6 shadow-sm max-w-3xl mx-auto">
+                        <ReframeUpload
+                            onFileSelect={selectFile}
+                            file={file}
+                            disabled={isProcessing}
+                        />
+                    </div>
+                )}
 
-                        {/* Crop Adjuster (Before) */}
-                        {file && previewUrl && (
-                            <div className="bg-card rounded-2xl border border-border p-6 shadow-sm">
+                {/* ─── Opus-like layout ─── */}
+                {file && previewUrl && (
+                    <div className="mt-6 space-y-5">
+                        <div className="grid lg:grid-cols-[1fr_380px] gap-6 items-start">
+                            {/* LEFT (≈70%): preview + overlay */}
+                            <div className="bg-card rounded-2xl border border-border p-5 shadow-sm">
                                 <div className="flex items-center gap-3 mb-4">
                                     <div className="flex items-center gap-2">
                                         <Monitor className="size-4 text-blue-400" />
                                         <span className="text-sm font-semibold text-foreground">
-                                            Original — {meta ? `${meta.width}×${meta.height}` : 'Loading...'}
+                                            Live Preview
                                         </span>
                                     </div>
-
-                                    {/* File info pill */}
                                     <div className="ml-auto flex items-center gap-2">
                                         <span className="text-[11px] text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
-                                            {file.name.length > 25 ? file.name.slice(0, 22) + '...' : file.name}
+                                            {file.name.length > 28 ? file.name.slice(0, 25) + '...' : file.name}
                                         </span>
                                         {!isProcessing && (
                                             <button
@@ -102,87 +105,68 @@ export default function ReframePage() {
                                     </div>
                                 </div>
 
-                                <CropAdjuster
+                                <VideoPreviewWithOverlay
                                     videoUrl={previewUrl}
-                                    meta={meta || { width: 1920, height: 1080, duration: 0, codec: '', fps: 30 }}
-                                    cropX={settings.cropX}
+                                    jobId={jobId}
                                     ratio={settings.ratio}
-                                    autoCenter={settings.autoCenter}
-                                    onCropXChange={setCropX}
+                                    meta={meta}
+                                    aiMode={settings.aiMode}
                                 />
-                            </div>
-                        )}
 
-                        {/* Output Preview (After) */}
-                        {file && previewUrl && (
-                            <div className="bg-card rounded-2xl border border-border p-6 shadow-sm">
-                                <div className="flex items-center gap-2 mb-4">
-                                    <Smartphone className="size-4 text-purple-500" />
-                                    <span className="text-sm font-semibold text-foreground">
-                                        Preview After Reframe
-                                    </span>
+                                {/* Manual adjust only when aiMode=manual */}
+                                {settings.aiMode === 'manual' && (
+                                    <div className="mt-5">
+                                        <CropAdjuster
+                                            videoUrl={previewUrl}
+                                            meta={meta || { width: 1920, height: 1080, duration: 0, codec: '', fps: 30 }}
+                                            cropX={settings.cropX}
+                                            ratio={settings.ratio}
+                                            autoCenter={false}
+                                            onCropXChange={setCropX}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* RIGHT (≈30%): controls */}
+                            <div className="lg:sticky lg:top-20 lg:self-start">
+                                <div className="bg-card rounded-2xl border border-border p-6 shadow-sm">
+                                    <div className="flex items-center gap-2 mb-5">
+                                        <Smartphone className="size-4 text-purple-500" />
+                                        <h2 className="text-lg font-bold text-foreground">AI Reframe</h2>
+                                    </div>
+
+                                    <ReframeControls
+                                        ratio={settings.ratio}
+                                        aiMode={settings.aiMode}
+                                        zoomStyle={settings.zoomStyle}
+                                        focusSubjectId={settings.focusSubjectId}
+                                        status={status}
+                                        hasFile={!!file}
+                                        progress={progress}
+                                        error={error}
+                                        downloadReady={downloadReady}
+                                        onRatioChange={setRatio}
+                                        onAIModeChange={setAIMode}
+                                        onZoomStyleChange={setZoomStyle}
+                                        onFocusSubjectChange={setFocusSubject}
+                                        onProcess={uploadAndProcess}
+                                        onDownload={download}
+                                        onReset={reset}
+                                    />
                                 </div>
-
-                                <ReframePreview
-                                    videoUrl={previewUrl}
-                                    meta={meta || { width: 1920, height: 1080, duration: 0, codec: '', fps: 30 }}
-                                    cropX={settings.cropX}
-                                    ratio={settings.ratio}
-                                    autoCenter={settings.autoCenter}
-                                />
                             </div>
-                        )}
-                    </div>
-
-                    {/* ─── Right Column: Controls ─── */}
-                    <div className="lg:sticky lg:top-20 lg:self-start">
-                        <div className="bg-card rounded-2xl border border-border p-6 shadow-sm">
-                            <h2 className="text-lg font-bold text-foreground mb-5">
-                                Settings
-                            </h2>
-
-                            <ReframeControls
-                                ratio={settings.ratio}
-                                autoCenter={settings.autoCenter}
-                                status={status}
-                                hasFile={!!file}
-                                progress={progress}
-                                error={error}
-                                downloadReady={downloadReady}
-                                onRatioChange={setRatio}
-                                onToggleAutoCenter={toggleAutoCenter}
-                                onProcess={uploadAndProcess}
-                                onDownload={download}
-                                onReset={reset}
-                            />
                         </div>
 
-                        {/* ─── Info Card ─── */}
-                        <div className="mt-4 bg-gradient-to-br from-purple-500/5 to-pink-500/5 rounded-2xl border border-purple-500/10 p-5">
-                            <h3 className="text-sm font-semibold text-foreground mb-2">
-                                How it works
-                            </h3>
-                            <ul className="space-y-2 text-xs text-muted-foreground">
-                                <li className="flex gap-2">
-                                    <span className="text-purple-500 font-bold">1.</span>
-                                    Upload a horizontal video (16:9 or similar)
-                                </li>
-                                <li className="flex gap-2">
-                                    <span className="text-purple-500 font-bold">2.</span>
-                                    Choose output ratio and adjust crop position
-                                </li>
-                                <li className="flex gap-2">
-                                    <span className="text-purple-500 font-bold">3.</span>
-                                    Click &quot;Reframe Video&quot; to process
-                                </li>
-                                <li className="flex gap-2">
-                                    <span className="text-purple-500 font-bold">4.</span>
-                                    Download your perfectly cropped vertical video
-                                </li>
-                            </ul>
-                        </div>
+                        {/* BOTTOM: progress + stage logs */}
+                        <ReframeProgress
+                            status={status}
+                            progress={progress}
+                            error={error}
+                            logs={stageLogs}
+                        />
                     </div>
-                </div>
+                )}
             </div>
         </main>
     );

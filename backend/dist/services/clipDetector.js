@@ -1,7 +1,12 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.clipDetector = exports.ClipDetector = void 0;
 const clipScorer_1 = require("./clipScorer");
+const axios_1 = __importDefault(require("axios"));
+const config_1 = require("../config");
 /**
  * Configuration for clip detection
  */
@@ -13,11 +18,69 @@ const CLIP_CONFIG = {
     maxClips: 15
 };
 /**
- * ClipDetector - Analyzes transcripts and generates clip candidates
+ * ClipDetector - Analyzes transcripts and generates clip candidates.
+ *
+ * Supports two modes:
+ *   1. AI-powered (preferred): calls /analyze-highlights for multimodal analysis
+ *   2. Legacy fallback: text-only pause-based detection
  */
 class ClipDetector {
     /**
-     * Analyze transcript and generate clip candidates
+     * Run multimodal highlight analysis via the AI service.
+     * Falls back to legacy transcript analysis if AI service is unavailable.
+     */
+    async analyzeVideo(videoPath, transcript, category = 'podcast', maxClips = CLIP_CONFIG.maxClips) {
+        // Try AI-powered analysis first
+        try {
+            const result = await this.analyzeWithAI(videoPath, transcript.jobId || '', category, maxClips);
+            return result;
+        }
+        catch (error) {
+            console.warn(`⚠️ AI highlight analysis unavailable: ${error.message}`);
+            console.warn('   Falling back to legacy transcript-based detection');
+            return this.analyzeTranscript(transcript, maxClips);
+        }
+    }
+    /**
+     * Call the AI service /analyze-highlights endpoint for
+     * multimodal highlight extraction.
+     */
+    async analyzeWithAI(videoPath, jobId, category, maxClips) {
+        console.log(`🧠 Requesting AI highlight analysis for job ${jobId}...`);
+        const response = await axios_1.default.post(`${config_1.config.aiServiceUrl}/analyze-highlights`, {
+            jobId,
+            videoPath,
+            category,
+            maxClips,
+            whisperModel: 'medium',
+        }, {
+            timeout: 600000, // 10 minute timeout for full analysis
+        });
+        if (!response.data.success) {
+            throw new Error(response.data.error || 'AI analysis returned unsuccessful');
+        }
+        console.log(`🧠 AI analysis complete: ${response.data.total} highlights found`);
+        console.log(`   Duration: ${response.data.metadata.processing_time_seconds}s`);
+        console.log(`   Category: ${response.data.metadata.category}`);
+        console.log(`   Language: ${response.data.metadata.language}`);
+        // Convert AI highlights to ClipCandidate format
+        const candidates = response.data.highlights.map((highlight) => ({
+            startTime: highlight.start,
+            endTime: highlight.end,
+            duration: highlight.duration,
+            segments: [], // AI analysis doesn't return per-segment data
+            text: highlight.text || '',
+            score: clipScorer_1.clipScorer.fromAIHighlight(highlight),
+        }));
+        return {
+            jobId,
+            candidates,
+            selectedCount: candidates.length,
+        };
+    }
+    /**
+     * LEGACY: Analyze transcript and generate clip candidates
+     * (text-only, pause-based detection)
      */
     analyzeTranscript(transcript, maxClips = CLIP_CONFIG.maxClips) {
         const { segments } = transcript;

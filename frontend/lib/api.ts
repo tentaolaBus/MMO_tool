@@ -576,6 +576,23 @@ export async function downloadReframedVideo(jobId: string): Promise<void> {
     URL.revokeObjectURL(url);
 }
 
+/**
+ * Request AI reframing for an existing clip (Opus-like).
+ * Returns BullMQ jobId. Track progress via the existing /api/jobs/:jobId/progress SSE.
+ */
+export async function requestClipReframe(params: {
+    clipId: string;
+    videoUrl: string;
+    targetAspectRatio?: string; // default '9:16'
+}): Promise<{ success: boolean; jobId: string }> {
+    const response = await axios.post(`${API_BASE_URL}/reframe`, {
+        clipId: params.clipId,
+        videoUrl: params.videoUrl,
+        targetAspectRatio: params.targetAspectRatio || '9:16',
+    });
+    return response.data;
+}
+
 // ═══════════════════════════════════════════════════
 //  Standalone Subtitle APIs
 // ═══════════════════════════════════════════════════

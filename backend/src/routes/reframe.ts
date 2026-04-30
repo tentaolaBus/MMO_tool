@@ -9,6 +9,7 @@ import { videoReframer } from '../services/videoReframer';
 import { addReframeJob, getReframeJob } from '../services/reframeQueue';
 import { progressService } from '../services/progress';
 import { uploadRateLimit, concurrentJobLimit, trackJob } from '../middleware/rateLimiter';
+import { queries } from '../services/database';
 
 const router = Router();
 
@@ -136,7 +137,13 @@ router.post(
             }
 
             // Add to reframe queue
-            await addReframeJob(jobId, videoPath, settings);
+            // Legacy upload-based reframe flow: treat jobId as clipId.
+            // The AI pipeline reads from /storage/videos/<jobId>.mp4 and outputs /storage/reframed/reframed_<jobId>.mp4
+            await addReframeJob(jobId, {
+                clipId: jobId,
+                videoUrl: `/storage/videos/${jobId}.mp4`,
+                targetAspectRatio: settings.ratio || '9:16',
+            });
             console.log(`   [PIPELINE] ✅ Reframe job queued: ${jobId}`);
 
             // Track for concurrent job limiting
@@ -157,6 +164,58 @@ router.post(
         }
     }
 );
+
+/**
+ * POST /api/reframe
+ * Production reframing request for an EXISTING clip (Opus-like).
+ *
+ * Body (JSON):
+ *   - clipId: string
+ *   - videoUrl: string  (usually `/storage/clips/<file>.mp4` from the clips API)
+ *   - targetAspectRatio: '9:16' (future-proof)
+ *
+ * Returns immediately with BullMQ jobId. Track progress via /api/jobs/:jobId/progress (SSE).
+ */
+router.post('/', async (req: Request, res: Response) => {
+    try {
+        const { clipId, videoUrl, targetAspectRatio = '9:16' } = req.body || {};
+
+        if (!clipId || typeof clipId !== 'string') {
+            return res.status(400).json({ success: false, message: 'clipId is required' });
+        }
+        if (!videoUrl || typeof videoUrl !== 'string') {
+            return res.status(400).json({ success: false, message: 'videoUrl is required' });
+        }
+        if (typeof targetAspectRatio !== 'string') {
+            return res.status(400).json({ success: false, message: 'targetAspectRatio must be a string' });
+        }
+
+        // Sanity: ensure clip exists (helps frontends catch stale IDs early)
+        try {
+            const clip = await queries.getClipById(clipId);
+            if (!clip) {
+                return res.status(404).json({ success: false, message: 'Clip not found' });
+            }
+        } catch {
+            // If DB is down, still allow enqueue (worker will fail loudly).
+        }
+
+        const jobId = uuidv4();
+
+        // Seed progress immediately so SSE updates move off "idle" right away.
+        progressService.update(jobId, 1, 'queued', 'Queued for AI reframing...');
+
+        await addReframeJob(jobId, { clipId, videoUrl, targetAspectRatio });
+
+        return res.json({ success: true, jobId });
+    } catch (error: any) {
+        console.error('❌ POST /api/reframe error:', error.message);
+        return res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to queue reframe job',
+        });
+    }
+});
 
 /**
  * POST /api/reframe/settings
@@ -189,7 +248,11 @@ router.post('/settings/:jobId', async (req: Request, res: Response) => {
         };
 
         // Re-queue with new settings
-        await addReframeJob(`${jobId}-r${Date.now()}`, videoPath, settings);
+        await addReframeJob(`${jobId}-r${Date.now()}`, {
+            clipId: jobId,
+            videoUrl: `/storage/videos/${jobId}.mp4`,
+            targetAspectRatio: settings.ratio || '9:16',
+        });
 
         res.json({
             success: true,

@@ -18,9 +18,12 @@ import {
     renderClips,
     updateClipSelection,
     downloadSelectedClips,
+    downloadClip,
     cleanupJob,
+    requestClipReframe,
 } from '@/lib/api';
 import type { Clip } from '@/lib/types';
+import ClipPreviewModal from '@/components/clipper/ClipPreviewModal';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'http://localhost:3001';
 
@@ -49,11 +52,14 @@ export default function AIClippingPage() {
     // ─── Results ───
     const [clips, setClips] = useState<Clip[]>([]);
     const [selectedClips, setSelectedClips] = useState<Set<string>>(new Set());
+    const [previewClip, setPreviewClip] = useState<Clip | null>(null);
     const [downloading, setDownloading] = useState(false);
     const [isGenerating, setIsGenerating] = useState(false);
     const [isCancelling, setIsCancelling] = useState(false);
+    const [reframeByClip, setReframeByClip] = useState<Record<string, { jobId: string; progress: { percent: number; stage: string; message: string } }>>({});
 
     const unsubscribeRef = useRef<(() => void) | null>(null);
+    const reframeUnsubRef = useRef<Record<string, () => void>>({});
     const mountedRef = useRef(true);
     // jobId / pageState refs let the unmount cleanup observe the LATEST values
     // without making the cleanup re-run on every state change (which would tear
@@ -74,6 +80,10 @@ export default function AIClippingPage() {
             mountedRef.current = false;
             unsubscribeRef.current?.();
             unsubscribeRef.current = null;
+            Object.values(reframeUnsubRef.current).forEach((fn) => {
+                try { fn(); } catch {}
+            });
+            reframeUnsubRef.current = {};
             // Best-effort: cancel any pending job we own
             if (jobIdRef.current && pageStateRef.current === 'processing') {
                 cleanupJob(jobIdRef.current).catch(() => {});
@@ -193,6 +203,77 @@ export default function AIClippingPage() {
         setSelectedClips(new Set(clipList.filter(c => c.selected).map(c => c.id)));
         setPageState('results');
     }, []);
+
+    const handleReframeClip = useCallback(async (clip: Clip) => {
+        try {
+            if (reframeByClip[clip.id] && reframeByClip[clip.id]?.progress.stage !== 'failed') return;
+
+            setReframeByClip(prev => ({
+                ...prev,
+                [clip.id]: { jobId: 'starting', progress: { percent: 0, stage: 'queued', message: 'Queued for AI reframing...' } },
+            }));
+
+            const resp = await requestClipReframe({
+                clipId: clip.id,
+                videoUrl: clip.videoUrl,
+                targetAspectRatio: '9:16',
+            });
+
+            if (!mountedRef.current) return;
+            if (!resp?.success || !resp.jobId) {
+                throw new Error('Failed to start reframe job');
+            }
+
+            const reframeJobId = resp.jobId;
+            setReframeByClip(prev => ({
+                ...prev,
+                [clip.id]: { jobId: reframeJobId, progress: { percent: 1, stage: 'queued', message: 'Queued for AI reframing...' } },
+            }));
+
+            const unsub = subscribeToProgress(
+                reframeJobId,
+                async (data) => {
+                    if (!mountedRef.current) return;
+                    setReframeByClip(prev => ({
+                        ...prev,
+                        [clip.id]: { jobId: reframeJobId, progress: data },
+                    }));
+
+                    if (data.stage === 'completed') {
+                        try {
+                            const refreshed = await getClips(clip.jobId);
+                            if (mountedRef.current && refreshed?.success && refreshed.clips) {
+                                setClips(refreshed.clips);
+                            }
+                        } finally {
+                            reframeUnsubRef.current[clip.id]?.();
+                            delete reframeUnsubRef.current[clip.id];
+                            setReframeByClip(prev => {
+                                const next = { ...prev };
+                                delete next[clip.id];
+                                return next;
+                            });
+                        }
+                    }
+                },
+                () => {
+                    if (!mountedRef.current) return;
+                    setReframeByClip(prev => ({
+                        ...prev,
+                        [clip.id]: { jobId: reframeJobId, progress: { percent: 0, stage: 'failed', message: 'Progress connection lost. Retry reframe.' } },
+                    }));
+                },
+            );
+
+            reframeUnsubRef.current[clip.id] = unsub;
+        } catch (err: any) {
+            if (!mountedRef.current) return;
+            setReframeByClip(prev => ({
+                ...prev,
+                [clip.id]: { jobId: 'error', progress: { percent: 0, stage: 'failed', message: err.message || 'Failed to start reframing' } },
+            }));
+        }
+    }, [reframeByClip]);
 
     const fallbackPoll = useCallback(async (jid: string) => {
         try {
@@ -438,10 +519,23 @@ export default function AIClippingPage() {
                                     clip={clip}
                                     selected={selectedClips.has(clip.id)}
                                     onToggle={toggleClip}
+                                    onPreview={setPreviewClip}
                                     backendUrl={BACKEND_URL}
+                                    onReframe={handleReframeClip}
+                                    reframeState={reframeByClip[clip.id]?.progress || null}
                                 />
                             ))}
                         </div>
+
+                        {/* Preview modal — shared across all cards */}
+                        <ClipPreviewModal
+                            clip={previewClip}
+                            clips={clips}
+                            onClose={() => setPreviewClip(null)}
+                            onChange={setPreviewClip}
+                            onDownload={(c) => downloadClip(c.id)}
+                            backendUrl={BACKEND_URL}
+                        />
 
                         {/* Download bar */}
                         {selectedClips.size > 0 && (
@@ -729,10 +823,16 @@ function ProcessingView({ progress }: { progress: { percent: number; stage: stri
 
 // ─── Clip Card ───
 
-function ClipCard({ clip, selected, onToggle, backendUrl }: {
-    clip: Clip; selected: boolean; onToggle: (id: string) => void; backendUrl: string;
+function ClipCard({ clip, selected, onToggle, onPreview, backendUrl, onReframe, reframeState }: {
+    clip: Clip;
+    selected: boolean;
+    onToggle: (id: string) => void;
+    onPreview: (clip: Clip) => void;
+    backendUrl: string;
+    onReframe: (clip: Clip) => void;
+    reframeState: { percent: number; stage: string; message: string } | null;
 }) {
-    const [isPlaying, setIsPlaying] = useState(false);
+    const [hovering, setHovering] = useState(false);
     const [expanded, setExpanded] = useState(false);
 
     const cacheBuster = clip.updatedAt ? `?v=${new Date(clip.updatedAt).getTime()}` : '';
@@ -755,39 +855,60 @@ function ClipCard({ clip, selected, onToggle, backendUrl }: {
             : clip.text
         : `Clip #${clip.clipIndex + 1}`;
 
+    // Open preview on card click — but ignore clicks that bubble up from
+    // interactive controls (Reframe/Subtitles links, checkbox, score toggle).
+    // Those controls all call e.stopPropagation() in their own handlers below.
+    const openPreview = () => onPreview(clip);
+    const stop = (e: React.MouseEvent | React.ChangeEvent) => e.stopPropagation();
+
     return (
-        <div className={`
-            bg-card rounded-2xl border-2 overflow-hidden transition-all duration-200 group
-            ${selected ? 'border-purple-500 shadow-lg shadow-purple-500/10' : 'border-border hover:border-purple-400/30'}
-        `}>
-            {/* Video preview */}
-            <div className="relative bg-black aspect-video cursor-pointer"
-                onClick={() => setIsPlaying(!isPlaying)}
-                onMouseEnter={() => setIsPlaying(true)}
-                onMouseLeave={() => setIsPlaying(false)}>
+        <div
+            role="button"
+            tabIndex={0}
+            aria-label={`Preview clip ${clip.clipIndex + 1}`}
+            onClick={openPreview}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openPreview();
+                }
+            }}
+            onMouseEnter={() => setHovering(true)}
+            onMouseLeave={() => setHovering(false)}
+            className={`
+                bg-card rounded-2xl border-2 overflow-hidden transition-all duration-200 group cursor-pointer
+                focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-background
+                ${selected ? 'border-purple-500 shadow-lg shadow-purple-500/10' : 'border-border hover:border-purple-400/30'}
+            `}
+        >
+            {/* Video thumbnail */}
+            <div className="relative bg-black aspect-video">
                 <video
-                    key={videoSrc} src={videoSrc}
-                    className="w-full h-full object-contain" loop muted playsInline
+                    key={videoSrc}
+                    src={videoSrc}
+                    className="w-full h-full object-contain"
+                    loop
+                    muted
+                    playsInline
+                    preload="metadata"
                     ref={(v) => {
-                        if (v) { isPlaying ? v.play().catch(() => {}) : (v.pause(), v.currentTime = 0); }
+                        if (v) { hovering ? v.play().catch(() => {}) : (v.pause(), v.currentTime = 0); }
                     }}
                 />
-                {!isPlaying && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/10 transition-all">
-                        <div className="size-11 rounded-full bg-white/90 flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform">
-                            <Play className="size-5 text-purple-600 ml-0.5" fill="currentColor" />
-                        </div>
+                <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/15 transition-all pointer-events-none">
+                    <div className="size-11 rounded-full bg-white/90 flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform">
+                        <Play className="size-5 text-purple-600 ml-0.5" fill="currentColor" />
                     </div>
-                )}
+                </div>
 
                 {/* AI Score badge */}
-                <div className={`absolute top-2.5 right-2.5 px-2.5 py-1 rounded-lg text-xs font-bold border ${scoreColor} backdrop-blur-sm`}>
+                <div className={`absolute top-2.5 right-2.5 px-2.5 py-1 rounded-lg text-xs font-bold border ${scoreColor} backdrop-blur-sm pointer-events-none`}>
                     ⚡ {displayScore}/10
                 </div>
 
                 {/* Duration */}
                 {duration && (
-                    <div className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded-md bg-black/70 text-[11px] text-white font-medium backdrop-blur-sm">
+                    <div className="absolute bottom-2.5 right-2.5 px-2 py-0.5 rounded-md bg-black/70 text-[11px] text-white font-medium backdrop-blur-sm pointer-events-none">
                         {duration}
                     </div>
                 )}
@@ -797,28 +918,64 @@ function ClipCard({ clip, selected, onToggle, backendUrl }: {
             <div className="p-4 space-y-3">
                 {/* Selection + hook */}
                 <div className="flex items-start gap-2.5">
-                    <input type="checkbox" checked={selected} onChange={() => onToggle(clip.id)}
-                        className="size-4 rounded border-border accent-purple-500 mt-0.5 flex-shrink-0" />
+                    <input
+                        type="checkbox"
+                        checked={selected}
+                        onClick={stop}
+                        onChange={(e) => { e.stopPropagation(); onToggle(clip.id); }}
+                        className="size-4 rounded border-border accent-purple-500 mt-0.5 flex-shrink-0 cursor-pointer"
+                        aria-label={`Select clip ${clip.clipIndex + 1}`}
+                    />
                     <p className="text-sm text-foreground font-medium leading-snug line-clamp-2">
                         {hookText}
                     </p>
                 </div>
 
-                {/* Actions */}
+                {/* Actions — stopPropagation so card click doesn't fire */}
                 <div className="flex items-center gap-2">
-                    <Link href="/reframe" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-500/10 text-blue-500 text-[11px] font-medium hover:bg-blue-500/20 transition-colors">
-                        <Crop className="size-3" /> Reframe
-                    </Link>
-                    <Link href="/subtitles" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-500 text-[11px] font-medium hover:bg-amber-500/20 transition-colors">
+                    <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); onReframe(clip); }}
+                        disabled={!!reframeState && reframeState.stage !== 'failed'}
+                        className={`
+                            flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors
+                            ${reframeState
+                                ? (reframeState.stage === 'failed'
+                                    ? 'bg-red-500/10 text-red-400 hover:bg-red-500/15'
+                                    : 'bg-blue-500/15 text-blue-400 cursor-not-allowed')
+                                : 'bg-blue-500/10 text-blue-500 hover:bg-blue-500/20'}
+                        `}
+                    >
+                        <Crop className="size-3" />
+                        {reframeState
+                            ? (reframeState.stage === 'failed'
+                                ? 'Retry Reframe'
+                                : `Reframing ${Math.round(reframeState.percent)}%`)
+                            : 'Reframe'}
+                    </button>
+                    <Link
+                        href="/subtitles"
+                        onClick={stop}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/10 text-amber-500 text-[11px] font-medium hover:bg-amber-500/20 transition-colors"
+                    >
                         <Type className="size-3" /> Subtitles
                     </Link>
                 </div>
 
+                {reframeState && (
+                    <div onClick={stop} className={`text-[11px] ${reframeState.stage === 'failed' ? 'text-red-400' : 'text-muted-foreground'}`}>
+                        {reframeState.message || 'Reframing...'}
+                    </div>
+                )}
+
                 {/* Score breakdown */}
                 {clip.score && (
-                    <div>
-                        <button onClick={() => setExpanded(!expanded)}
-                            className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors">
+                    <div onClick={stop}>
+                        <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+                            className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                        >
                             {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
                             AI Score Breakdown
                         </button>

@@ -5,11 +5,22 @@
 /** Supported output aspect ratios */
 export type OutputRatio = '9:16' | '1:1' | '4:5';
 
+/** AI reframing mode */
+export type AIMode = 'tracking' | 'face' | 'manual';
+
+/** Zoom style */
+export type ZoomStyle = 'smooth' | 'dynamic';
+
 /** Reframe processing settings */
 export interface ReframeSettings {
     ratio: OutputRatio;
     cropX: number;        // 0–1 fraction (0=left, 0.5=center, 1=right)
-    autoCenter: boolean;
+    autoCenter: boolean;  // legacy transport field (kept to avoid breaking upload API)
+
+    // New (Opus-like) controls
+    aiMode: AIMode;
+    zoomStyle: ZoomStyle;
+    focusSubjectId: 'auto' | string;
 }
 
 /** Video metadata from probe */
@@ -47,6 +58,25 @@ export interface ReframeProgress {
     percent: number;
     stage: string;
     message: string;
+}
+
+export interface ReframeCropsJson {
+    meta: {
+        clipId: string;
+        input: string;
+        width: number;
+        height: number;
+        fps: number;
+        frames: number;
+        duration: number;
+        target_aspect: string;
+        alpha: number;
+        zoom: string;
+        face_priority: boolean;
+        // Optional: when backend provides it
+        keyframes?: Array<{ frame: number; bbox: [number, number, number, number]; cls: string }>;
+    };
+    crops: Array<{ frame: number; x: number; y: number; width: number; height: number }>;
 }
 
 /** Ratio display info */

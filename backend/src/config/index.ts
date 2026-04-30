@@ -2,6 +2,13 @@
 export const config = {
     port: Number(process.env.PORT) || 10000,
     aiServiceUrl: process.env.AI_SERVICE_URL || 'http://localhost:5000',
+    // Reframe AI worker (Python) integration:
+    // - If you run a dedicated Python service, set REFRAME_SERVICE_URL.
+    // - For local "spawn python script" mode, set PYTHON_BIN / REFRAME_PIPELINE_PATH.
+    reframeServiceUrl: process.env.REFRAME_SERVICE_URL || process.env.AI_SERVICE_URL || 'http://localhost:5000',
+    pythonBin: process.env.PYTHON_BIN || 'python',
+    // NOTE: backend is typically run from the `backend/` directory, so `ai/` lives one level up.
+    reframePipelinePath: process.env.REFRAME_PIPELINE_PATH || '../ai/reframe_pipeline.py',
     uploadDir: './uploads',
     storageDir: './storage',
     maxFileSize: 500 * 1024 * 1024, // 500MB
